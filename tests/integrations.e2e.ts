@@ -9,13 +9,14 @@ import 'dotenv/config';
 
 const API_PORT=3002,STUB_PORT=4010,api=`http://localhost:${API_PORT}/api`,origin='http://localhost:5173',base=`http://localhost:${API_PORT}`;
 const calls:{provider:string;method:string;path:string;body:string}[]=[];
-const mode={twilio:'ok',telegram:'ok',google:'ok',busy:[] as {start:string;end:string}[]};
-let sid=0,lastTwilioSid='';
+const mode={meta:'ok',twilio:'ok',telegram:'ok',google:'ok',busy:[] as {start:string;end:string}[]};
+let sid=0,lastTwilioSid='',lastMetaId='';
 
 const stub=http.createServer((req,res)=>{let body='';req.on('data',c=>body+=c);req.on('end',()=>{
- const url=req.url||'',provider=url.startsWith('/twilio')?'twilio':url.startsWith('/stripe')?'stripe':url.startsWith('/telegram')?'telegram':url.startsWith('/gtoken')?'gtoken':'gcal';
+ const url=req.url||'',provider=url.startsWith('/graph')?'graph':url.startsWith('/twilio')?'twilio':url.startsWith('/stripe')?'stripe':url.startsWith('/telegram')?'telegram':url.startsWith('/gtoken')?'gtoken':'gcal';
  calls.push({provider,method:req.method||'',path:url,body});
  const json=(s:number,o:unknown)=>{res.writeHead(s,{'Content-Type':'application/json'});res.end(s===204?'':JSON.stringify(o));};
+ if(provider==='graph'){if(req.method==='GET')return json(200,{display_phone_number:'+1 555 000'});if(mode.meta==='expired')return json(401,{error:{code:190,message:'Session has expired'}});if(mode.meta==='window')return json(400,{error:{code:131047,message:'Re-engagement message'}});lastMetaId='wamid.OUT'+(++sid);return json(200,{messages:[{id:lastMetaId}]});}
  if(provider==='twilio'){if(url.endsWith('.json')&&req.method==='GET')return json(200,{sid:'AC1'});if(mode.twilio==='fail')return json(500,{message:'boom'});lastTwilioSid='SM'+(++sid);return json(201,{sid:lastTwilioSid});}
  if(provider==='stripe'){if(url.includes('/balance'))return json(200,{});return json(200,{id:'cs_test_'+(++sid),url:'https://checkout.stripe.test/pay/'+sid});}
  if(provider==='telegram'){if(url.includes('getMe'))return json(200,{ok:true});if(mode.telegram==='unauthorized')return json(401,{ok:false,description:'Unauthorized'});return json(200,{ok:true});}
@@ -27,7 +28,7 @@ const stub=http.createServer((req,res)=>{let body='';req.on('data',c=>body+=c);r
 
 let children:ChildProcess[]=[];
 const env={...process.env,PORT:String(API_PORT),NODE_ENV:'development',PUBLIC_BASE_URL:base,INTEGRATIONS_SKIP_VERIFY:'1',
- TWILIO_API_BASE:`http://localhost:${STUB_PORT}/twilio`,STRIPE_API_BASE:`http://localhost:${STUB_PORT}/stripe`,TELEGRAM_API_BASE:`http://localhost:${STUB_PORT}/telegram`,GOOGLE_TOKEN_URL:`http://localhost:${STUB_PORT}/gtoken`,GOOGLE_CALENDAR_BASE:`http://localhost:${STUB_PORT}/gcal`};
+ TWILIO_API_BASE:`http://localhost:${STUB_PORT}/twilio`,STRIPE_API_BASE:`http://localhost:${STUB_PORT}/stripe`,TELEGRAM_API_BASE:`http://localhost:${STUB_PORT}/telegram`,META_GRAPH_BASE:`http://localhost:${STUB_PORT}/graph`,GOOGLE_TOKEN_URL:`http://localhost:${STUB_PORT}/gtoken`,GOOGLE_CALENDAR_BASE:`http://localhost:${STUB_PORT}/gcal`};
 before(async()=>{
  await new Promise<void>(r=>stub.listen(STUB_PORT,r));
  for(const script of ['server/main.ts','server/worker.ts'])children.push(spawn('node',['--import','tsx',script],{env:{...env,APP_ORIGIN:origin},stdio:['ignore','inherit','inherit']}));
@@ -161,4 +162,73 @@ test('google calendar: OAuth, refresh, conflicts, reschedule, cancel and revoked
  assert.equal((await c.call('GET','/calendar/connections')).body.connections[0].status,'needs_reconnect');mode.google='ok';
  // A different workspace never sees or reuses this workspace's connection.
  const other=await setup();assert.deepEqual((await other.call('GET','/calendar/connections')).body.connections,[]);
+});
+
+
+// ---- Meta WhatsApp Cloud API ----
+const metaSig=(secret:string,raw:string)=>'sha256='+createHmac('sha256',secret).update(raw).digest('hex');
+const META={accessToken:'EAAtoken',appSecret:'meta-app-secret',verifyToken:'my-verify-token',phoneNumberId:'1234567890'};
+async function metaSetup(){const c=new Client();await c.signup();const r=await c.call('PUT','/integrations/whatsapp',META);assert.equal(r.status,200,JSON.stringify(r.body));return c;}
+async function metaPost(c:Client,payload:unknown,secret=META.appSecret,sig?:string){const raw=JSON.stringify(payload);const r=await fetch(`${api}/webhooks/whatsapp/${c.ws}`,{method:'POST',headers:{'Content-Type':'application/json','X-Hub-Signature-256':sig??metaSig(secret,raw)},body:raw});return r.status;}
+const inbound=(id:string,from:string,body:string,phoneNumberId=META.phoneNumberId)=>({object:'whatsapp_business_account',entry:[{id:'WABA',changes:[{field:'messages',value:{messaging_product:'whatsapp',metadata:{display_phone_number:'15550000',phone_number_id:phoneNumberId},contacts:[{profile:{name:'Sam Cruz'},wa_id:from}],messages:[{from,id,timestamp:String(Math.floor(Date.now()/1000)),type:'text',text:{body}}]}}]}]});
+const statusEvt=(id:string,status:string,errors?:unknown)=>({object:'whatsapp_business_account',entry:[{id:'WABA',changes:[{field:'messages',value:{messaging_product:'whatsapp',metadata:{phone_number_id:META.phoneNumberId},statuses:[{id,status,timestamp:String(Math.floor(Date.now()/1000)),recipient_id:'12025550177',...(errors?{errors}:{})}]}}]}]});
+
+test('whatsapp (meta): webhook verification handshake',async()=>{
+ const c=await metaSetup();const url=`${api}/webhooks/whatsapp/${c.ws}`;
+ let r=await fetch(`${url}?hub.mode=subscribe&hub.verify_token=${META.verifyToken}&hub.challenge=12345`);assert.equal(r.status,200);assert.equal(await r.text(),'12345');
+ r=await fetch(`${url}?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=12345`);assert.equal(r.status,403);assert.ok(!(await r.text()).includes('12345'));
+ r=await fetch(`${url}?hub.mode=unsubscribe&hub.verify_token=${META.verifyToken}&hub.challenge=12345`);assert.equal(r.status,403);
+ r=await fetch(`${url}?hub.mode=subscribe&hub.challenge=12345`);assert.equal(r.status,403);
+ const other=new Client();await other.signup();r=await fetch(`${api}/webhooks/whatsapp/${other.ws}?hub.mode=subscribe&hub.verify_token=${META.verifyToken}&hub.challenge=12345`);assert.equal(r.status,403,'another workspace cannot use this token');
+});
+
+test('whatsapp (meta): signatures, de-duplication, contact matching, isolation, opt-out',async()=>{
+ const c=await metaSetup();const other=await metaSetup();
+ const evt=inbound('wamid.IN1','12025550177','Hi, I want a quote');
+ assert.equal(await metaPost(c,evt,META.appSecret,'sha256=deadbeef'),403,'forged signature rejected');
+ assert.equal(await metaPost(c,evt,'wrong-secret'),403,'wrong secret rejected');
+ const raw=JSON.stringify(evt);const r0=await fetch(`${api}/webhooks/whatsapp/${c.ws}`,{method:'POST',headers:{'Content-Type':'application/json','X-Hub-Signature-256':metaSig(META.appSecret,raw)},body:raw.replace('quote','QUOTE')});assert.equal(r0.status,403,'altered body rejected');
+ assert.equal((await c.call('GET','/leads')).body.total,0,'rejected requests create nothing');
+ assert.equal(await metaPost(c,evt),200);assert.equal(await metaPost(c,evt),200,'duplicate delivery acknowledged');
+ let leads=await c.call('GET','/leads');assert.equal(leads.body.total,1,'one lead, not two');assert.equal(leads.body.records[0].source,'WhatsApp');
+ assert.equal(await metaPost(c,inbound('wamid.IN2','12025550177','Following up')),200);
+ leads=await c.call('GET','/leads');assert.equal(leads.body.total,1,'known number attaches to the existing contact');
+ assert.equal((await c.call('GET','/bootstrap')).body.data.chats[0].messages.length,2);
+ assert.equal((await other.call('GET','/leads')).body.total,0,'nothing leaks into another workspace');
+ assert.equal(await metaPost(other,evt,META.appSecret),200);assert.equal((await other.call('GET','/leads')).body.total,1,'same number in another workspace is a separate lead');assert.equal((await c.call('GET','/leads')).body.total,1);
+ assert.equal(await metaPost(c,inbound('wamid.IN9','12025550999','hello',  '999')),200);assert.equal((await c.call('GET','/leads')).body.total,1,'events for a different phone number id are ignored');
+ assert.equal(await metaPost(c,inbound('wamid.IN3','12025550177','STOP')),200);
+ const contactId=leads.body.records[0].contact_id;const blocked=await c.call('POST',`/contacts/${contactId}/messages`,{body:'hello?'});assert.equal(blocked.status,409);assert.match(blocked.body.error,/opted out/);
+ const events=await c.call('GET','/integrations/events');assert.ok(events.body.some((e:any)=>e.status==='rejected'));assert.ok(!JSON.stringify(events.body).includes(META.accessToken)&&!JSON.stringify(events.body).includes(META.appSecret));
+});
+
+test('whatsapp (meta): send, failure reasons, retry and status callbacks',async()=>{
+ const c=await metaSetup();assert.equal(await metaPost(c,inbound('wamid.IN1','12025550177','Hello')),200);
+ const contactId=(await c.call('GET','/leads')).body.records[0].contact_id;
+ mode.meta='expired';const bad=await c.call('POST',`/contacts/${contactId}/messages`,{body:'Hi Sam'});assert.equal(bad.body.status,'failed');assert.match(bad.body.error,/token expired/i);
+ assert.equal((await c.call('GET','/integrations')).body.find((p:any)=>p.provider==='whatsapp').status,'error','expired token shows as an integration error');
+ mode.meta='ok';const out=(await c.call('GET','/bootstrap')).body.data.chats[0].messages.find((m:any)=>m.direction==='out');
+ const retry=await c.call('POST',`/messages/${out.id}/retry`);assert.equal(retry.body.status,'sent');
+ const sent=[...calls].reverse().find(x=>x.provider==='graph'&&x.method==='POST')!;const sentBody=JSON.parse(sent.body);assert.equal(sentBody.to,'12025550177');assert.equal(sentBody.type,'text');assert.ok(sent.path.includes('/1234567890/messages'));
+ const st=async()=>(await c.call('GET','/bootstrap')).body.data.chats[0].messages.find((m:any)=>m.id===out.id).status;
+ assert.equal(await st(),'Sent');
+ assert.equal(await metaPost(c,statusEvt(lastMetaId,'delivered')),200);assert.equal(await st(),'Delivered');
+ assert.equal(await metaPost(c,statusEvt(lastMetaId,'sent')),200);assert.equal(await st(),'Delivered','late sent never downgrades');
+ assert.equal(await metaPost(c,statusEvt(lastMetaId,'read')),200);assert.equal(await st(),'Delivered');
+ assert.equal(await metaPost(c,statusEvt(lastMetaId,'delivered'),'wrong'),403);
+ // A status failure is stored with a plain reason.
+ const second=await c.call('POST',`/contacts/${contactId}/messages`,{body:'Second'});assert.equal(second.body.status,'sent');
+ assert.equal(await metaPost(c,statusEvt(lastMetaId,'failed',[{code:131030,title:'Recipient not in allowed list'}])),200);
+ const failedMsg=(await c.call('GET','/bootstrap')).body.data.chats[0].messages.find((m:any)=>m.id===second.body.id);assert.equal(failedMsg.status,'Failed');
+});
+
+test('whatsapp (meta): 24-hour window needs a template',async()=>{
+ const c=await metaSetup();
+ const lead=await c.call('POST','/leads',{name:'Cold Contact',company:'Cold Co',phone:'+12025550188',source:'Manual'});assert.equal(lead.status,201);
+ const contactId=(await c.call('GET','/leads')).body.records[0].contact_id;
+ const before=calls.filter(x=>x.provider==='graph'&&x.method==='POST').length;
+ const free=await c.call('POST',`/contacts/${contactId}/messages`,{body:'Hello'});assert.equal(free.body.status,'failed');assert.match(free.body.error,/24 hours/);assert.equal(calls.filter(x=>x.provider==='graph'&&x.method==='POST').length,before,'no provider call outside the window');
+ const tpl=await c.call('POST',`/contacts/${contactId}/messages`,{body:'Intro template',template:{name:'hello_world',language:'en_US'}});assert.equal(tpl.body.status,'sent');
+ const b=JSON.parse([...calls].reverse().find(x=>x.provider==='graph'&&x.method==='POST')!.body);assert.equal(b.type,'template');assert.equal(b.template.name,'hello_world');assert.equal(b.template.language.code,'en_US');
+ assert.equal((await c.call('PUT','/integrations/whatsapp',{...META,phoneNumberId:'abc'})).status,400,'phone number id must be numeric');
 });

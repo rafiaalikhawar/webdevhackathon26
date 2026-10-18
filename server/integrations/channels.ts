@@ -1,4 +1,4 @@
-import {Controller,Post,Req,Res,Param,HttpException,Header,HttpCode} from '@nestjs/common';
+import {Controller,Get,Post,Req,Res,Param,Query,HttpException,Header,HttpCode} from '@nestjs/common';
 import type {Request,Response} from 'express';
 import {z} from 'zod';
 import {transaction,audit,DB} from '../db.js';
@@ -10,26 +10,46 @@ import {credentials,recordEvent,markResult,publicBase,getIntegration} from './re
 import {verifyTwilio,sendTwilio,stripWhatsapp} from './twilio.js';
 import {verifyStripe,createCheckout} from './stripe.js';
 import {http} from './manage.js';
+import {verifyMeta,safeEqual,sendMeta,toE164,explainMeta} from './whatsapp.js';
 const uuid=z.uuid();
 const nf=(m='Record not found.')=>new HttpException(m,404);
 const STOP=/^\s*(stop|stopall|unsubscribe|cancel|end|quit)\s*$/i;
 
-/** Sends one queued/failed outbound message through Twilio and records the outcome. Never throws for provider failures. */
+/** Stores one verified inbound customer message: match or create the contact (and lead), save the message, handle opt-out, notify the owner. */
+async function ingestInbound(db:DB,ws:string,m:{id:string;phone:string;name?:string;body:string;at?:Date}){
+ let contact=(await db.query('SELECT * FROM contacts WHERE workspace_id=$1 AND phone=$2 AND archived_at IS NULL',[ws,m.phone])).rows[0];
+ if(!contact){const created=await captureLead(db,ws,{name:m.name?.trim()||m.phone,phone:m.phone,source:'WhatsApp'});contact=(await db.query('SELECT * FROM contacts WHERE id=$1 AND workspace_id=$2',[created.contactId,ws])).rows[0];await addActivity(db,ws,contact.id,null,'created','Lead captured from WhatsApp.');}
+ const conv=(await db.query("INSERT INTO conversations(workspace_id,contact_id,owner_id,channel) VALUES($1,$2,$3,'whatsapp') ON CONFLICT(workspace_id,contact_id,channel) DO UPDATE SET owner_id=conversations.owner_id RETURNING id",[ws,contact.id,contact.owner_id])).rows[0];
+ const at=m.at&&!Number.isNaN(m.at.getTime())?m.at:new Date();
+ await db.query("INSERT INTO messages(workspace_id,conversation_id,provider_id,body,direction,status,created_at) VALUES($1,$2,$3,$4,'in','received',$5) ON CONFLICT(workspace_id,provider_id) DO NOTHING",[ws,conv.id,m.id,m.body,at]);
+ await addActivity(db,ws,contact.id,null,'message','Received a WhatsApp message.');
+ if(STOP.test(m.body)){await db.query('UPDATE contacts SET opted_out=true,version=version+1 WHERE id=$1 AND workspace_id=$2',[contact.id,ws]);await addActivity(db,ws,contact.id,null,'opt-out','Contact opted out of messages.');}
+ await db.query("INSERT INTO notifications(workspace_id,member_id,kind,body) VALUES($1,$2,'message',$3)",[ws,contact.owner_id,`New WhatsApp message from ${contact.name}.`]);
+}
+
+/** Sends one queued/failed outbound message through the connected WhatsApp provider (Meta Cloud API preferred, else Twilio) and records the outcome. Never throws for provider failures. */
 export async function deliverMessage(ws:string,messageId:string){
  const prep=await transaction(ws,async db=>{
   const m=(await db.query("SELECT m.*,c.contact_id FROM messages m JOIN conversations c ON c.id=m.conversation_id AND c.workspace_id=m.workspace_id WHERE m.id=$1 AND m.workspace_id=$2 AND m.direction='out' FOR UPDATE",[messageId,ws])).rows[0];
   if(!m)throw nf();if(m.status==='sent'||m.status==='delivered')return null;
   const contact=(await db.query('SELECT phone,opted_out FROM contacts WHERE id=$1 AND workspace_id=$2',[m.contact_id,ws])).rows[0];
   if(contact.opted_out)throw new HttpException('This contact opted out of messages, so Relay cannot send to them.',409);
-  const c=await credentials(db,ws,'twilio');if(!c)throw new HttpException('Messaging is not connected. An Admin can connect Twilio on the Integrations page.',409);
-  return {m,to:contact.phone as string,c};
+  const meta=await credentials(db,ws,'whatsapp'),tw=meta?null:await credentials(db,ws,'twilio');
+  if(!meta&&!tw)throw new HttpException('Messaging is not connected. An Admin can connect WhatsApp (Meta) or Twilio on the Integrations page.',409);
+  const windowClosed=!!meta&&!m.template&&!(await db.query("SELECT 1 FROM messages WHERE workspace_id=$1 AND conversation_id=$2 AND direction='in' AND created_at>now()-interval '24 hours' LIMIT 1",[ws,m.conversation_id])).rows[0];
+  return {m,to:contact.phone as string,meta,tw,windowClosed};
  });
  if(!prep)return {status:'sent'};
- const r=await sendTwilio(http,{accountSid:prep.c.secrets.accountSid,authToken:prep.c.secrets.authToken,from:prep.c.config.whatsappFrom,to:prep.to,body:prep.m.body,statusCallback:`${publicBase()}/api/webhooks/twilio/${ws}/status`});
+ const integrationId=(prep.meta||prep.tw)!.id;
+ const r:{ok:true;id:string}|{ok:false;reason:string}=prep.windowClosed
+  ?{ok:false,reason:'WhatsApp only allows free-form replies within 24 hours of the customer’s last message. Send an approved template instead.'}
+  :prep.meta?await sendMeta(http,{accessToken:prep.meta.secrets.accessToken,phoneNumberId:prep.meta.config.phoneNumberId,to:prep.to,body:prep.m.body,template:prep.m.template||undefined}).then(x=>x.ok?{ok:true as const,id:x.id}:x)
+  :await sendTwilio(http,{accountSid:prep.tw!.secrets.accountSid,authToken:prep.tw!.secrets.authToken,from:prep.tw!.config.whatsappFrom,to:prep.to,body:prep.m.body,statusCallback:`${publicBase()}/api/webhooks/twilio/${ws}/status`}).then(x=>x.ok?{ok:true as const,id:x.sid}:x);
  return transaction(ws,async db=>{
-  if(r.ok){await db.query("UPDATE messages SET status='sent',provider_id=$3,error_code=NULL WHERE id=$1 AND workspace_id=$2",[messageId,ws,r.sid]);await recordEvent(db,ws,prep.c.id,{eventId:'out:'+r.sid,direction:'out',type:'message.send',summary:{messageId,sid:r.sid}});await markResult(db,prep.c.id,ws,true);return {status:'sent'};}
+  if(r.ok){await db.query("UPDATE messages SET status='sent',provider_id=$3,error_code=NULL WHERE id=$1 AND workspace_id=$2",[messageId,ws,r.id]);await recordEvent(db,ws,integrationId,{eventId:'out:'+r.id,direction:'out',type:'message.send',summary:{messageId,id:r.id}});await markResult(db,integrationId,ws,true);return {status:'sent'};}
   await db.query("UPDATE messages SET status='failed',error_code=$3 WHERE id=$1 AND workspace_id=$2",[messageId,ws,r.reason.slice(0,300)]);
-  await recordEvent(db,ws,prep.c.id,{direction:'out',type:'message.send',status:'failed',summary:{messageId},error:r.reason});await markResult(db,prep.c.id,ws,false,r.reason);
+  await recordEvent(db,ws,integrationId,{direction:'out',type:'message.send',status:'failed',summary:{messageId},error:r.reason});
+  if(!prep.windowClosed)await markResult(db,integrationId,ws,false,r.reason);
   return {status:'failed',error:r.reason};
  });
 }
@@ -38,14 +58,14 @@ export async function deliverMessage(ws:string,messageId:string){
 export class ChannelController{
  @Post('contacts/:id/messages')async send(@Req()req:Request,@Param('id')contactId:string){
   const ctx=await context(req);requirePermission(ctx,'crm.edit');
-  const f=z.object({body:z.string().trim().min(1).max(1600)}).strict().parse(req.body);
+  const f=z.object({body:z.string().trim().min(1).max(1600),template:z.object({name:z.string().regex(/^[a-z0-9_]{1,512}$/),language:z.string().regex(/^[a-z]{2}(_[A-Z]{2})?$/)}).strict().optional()}).strict().parse(req.body);
   const messageId=await transaction(ctx.workspaceId,async db=>{
    await lockRules(db,ctx.workspaceId);
    const c=(await db.query('SELECT * FROM contacts WHERE id=$1 AND workspace_id=$2 AND archived_at IS NULL',[uuid.parse(contactId),ctx.workspaceId])).rows[0];if(!c)throw nf();requireRecord(ctx,c.owner_id);
    if(c.opted_out)throw new HttpException('This contact opted out of messages, so Relay cannot send to them.',409);
    if(!c.phone)throw new HttpException('This contact has no phone number. Add one before sending a message.',400);
    const conv=(await db.query("INSERT INTO conversations(workspace_id,contact_id,owner_id,channel) VALUES($1,$2,$3,'whatsapp') ON CONFLICT(workspace_id,contact_id,channel) DO UPDATE SET owner_id=EXCLUDED.owner_id RETURNING id",[ctx.workspaceId,c.id,c.owner_id])).rows[0];
-   const m=(await db.query("INSERT INTO messages(workspace_id,conversation_id,body,direction,status) VALUES($1,$2,$3,'out','queued') RETURNING id",[ctx.workspaceId,conv.id,f.body])).rows[0];
+   const m=(await db.query("INSERT INTO messages(workspace_id,conversation_id,body,direction,status,template) VALUES($1,$2,$3,'out','queued',$4) RETURNING id",[ctx.workspaceId,conv.id,f.body,f.template?JSON.stringify(f.template):null])).rows[0];
    await addActivity(db,ctx.workspaceId,c.id,ctx.memberId,'message','Sent a WhatsApp message.');
    const lead=(await db.query("SELECT * FROM leads WHERE workspace_id=$1 AND contact_id=$2 AND status='new' AND current_owner_id=$3 ORDER BY created_at DESC LIMIT 1 FOR UPDATE",[ctx.workspaceId,c.id,ctx.memberId])).rows[0];
    if(lead)await acknowledge(db,ctx,lead.id,lead.version);else await db.query('UPDATE leads SET last_activity_at=now() WHERE workspace_id=$1 AND contact_id=$2',[ctx.workspaceId,c.id]);
@@ -90,14 +110,7 @@ export class WebhookController{
    if(!verifyTwilio(c.secrets.authToken,publicBase()+req.originalUrl,params,req.header('x-twilio-signature'))){await recordEvent(db,workspace,c.id,{direction:'in',type:'message.inbound',status:'rejected',error:'Signature verification failed.'});res.status(403);return '<Response/>';}
    const sid=params.MessageSid;if(!sid){res.status(400);return '<Response/>';}
    if(!await recordEvent(db,workspace,c.id,{eventId:sid,direction:'in',type:'message.inbound',summary:{sid,from:mask4(params.From)}}))return '<Response/>';
-   const phone=stripWhatsapp(params.From||''),body=(params.Body||'').slice(0,1600);
-   let contact=(await db.query('SELECT * FROM contacts WHERE workspace_id=$1 AND phone=$2 AND archived_at IS NULL',[workspace,phone])).rows[0];
-   if(!contact){const created=await captureLead(db,workspace,{name:params.ProfileName?.trim()||phone,phone,source:'WhatsApp'});contact=(await db.query('SELECT * FROM contacts WHERE id=$1 AND workspace_id=$2',[created.contactId,workspace])).rows[0];await addActivity(db,workspace,contact.id,null,'created','Lead captured from WhatsApp.');}
-   const conv=(await db.query("INSERT INTO conversations(workspace_id,contact_id,owner_id,channel) VALUES($1,$2,$3,'whatsapp') ON CONFLICT(workspace_id,contact_id,channel) DO UPDATE SET owner_id=conversations.owner_id RETURNING id",[workspace,contact.id,contact.owner_id])).rows[0];
-   await db.query("INSERT INTO messages(workspace_id,conversation_id,provider_id,body,direction,status) VALUES($1,$2,$3,$4,'in','received') ON CONFLICT(workspace_id,provider_id) DO NOTHING",[workspace,conv.id,sid,body]);
-   await addActivity(db,workspace,contact.id,null,'message','Received a WhatsApp message.');
-   if(STOP.test(body)){await db.query('UPDATE contacts SET opted_out=true,version=version+1 WHERE id=$1 AND workspace_id=$2',[contact.id,workspace]);await addActivity(db,workspace,contact.id,null,'opt-out','Contact opted out of messages.');}
-   await db.query("INSERT INTO notifications(workspace_id,member_id,kind,body) VALUES($1,$2,'message',$3)",[workspace,contact.owner_id,`New WhatsApp message from ${contact.name}.`]);
+   await ingestInbound(db,workspace,{id:sid,phone:stripWhatsapp(params.From||''),name:params.ProfileName,body:(params.Body||'').slice(0,1600)});
    await markResult(db,c.id,workspace,true);
    return '<Response/>';
   });
@@ -114,6 +127,43 @@ export class WebhookController{
    if(m&&(rank[mapped]>=(rank[m.status]??0)))await db.query('UPDATE messages SET status=$3,error_code=$4 WHERE id=$1 AND workspace_id=$2',[m.id,workspace,mapped,mapped==='failed'?`Provider error ${params.ErrorCode||'unknown'}`:null]);
    if(mapped==='failed')await markResult(db,c.id,workspace,false,`Message ${sid} failed (code ${params.ErrorCode||'unknown'}).`);
    return '<Response/>';
+  });
+ }
+ /** Meta webhook verification handshake. Echoes hub.challenge only when the saved verify token matches. */
+ @Get('whatsapp/:ws')async whatsappVerify(@Param('ws')ws:string,@Query('hub.mode')mode:string|undefined,@Query('hub.verify_token')token:string|undefined,@Query('hub.challenge')challenge:string|undefined,@Res()res:Response){
+  const workspace=uuid.parse(ws);
+  const c=await transaction(workspace,db=>credentials(db,workspace,'whatsapp'));
+  if(mode==='subscribe'&&typeof token==='string'&&typeof challenge==='string'&&c?.secrets.verifyToken&&safeEqual(token,c.secrets.verifyToken))return res.status(200).type('text/plain').send(challenge);
+  return res.status(403).type('text/plain').send('Forbidden');
+ }
+ @Post('whatsapp/:ws')@HttpCode(200)async whatsapp(@Req()req:Request,@Param('ws')ws:string,@Res({passthrough:true})res:Response){
+  const workspace=uuid.parse(ws),raw:Buffer|undefined=(req as any).rawBody;if(!raw)throw new HttpException('Missing body.',400);
+  return transaction(workspace,async db=>{
+   const c=await credentials(db,workspace,'whatsapp');if(!c){res.status(403);return {error:'Messaging is not configured for this workspace.'};}
+   if(!verifyMeta(c.secrets.appSecret,raw,req.header('x-hub-signature-256'))){await recordEvent(db,workspace,c.id,{direction:'in',type:'whatsapp.webhook',status:'rejected',error:'Signature verification failed.'});res.status(403);return {error:'Invalid signature.'};}
+   let payload:any;try{payload=JSON.parse(raw.toString());}catch{res.status(400);return {error:'Invalid JSON.'};}
+   for(const entry of Array.isArray(payload?.entry)?payload.entry:[])for(const change of Array.isArray(entry?.changes)?entry.changes:[]){
+    if(change?.field!=='messages')continue;const v=change.value||{};
+    if(v.metadata?.phone_number_id!==c.config.phoneNumberId){await recordEvent(db,workspace,c.id,{direction:'in',type:'whatsapp.webhook',status:'ignored',error:'Event is for a different WhatsApp phone number.'});continue;}
+    const names=new Map<string,string>((Array.isArray(v.contacts)?v.contacts:[]).map((x:any)=>[String(x.wa_id),String(x.profile?.name||'')]));
+    for(const m of Array.isArray(v.messages)?v.messages:[]){
+     if(typeof m?.id!=='string'||typeof m?.from!=='string')continue;
+     if(!await recordEvent(db,workspace,c.id,{eventId:m.id,direction:'in',type:'message.inbound',summary:{id:m.id,from:mask4(m.from),type:m.type,timestamp:m.timestamp}}))continue;
+     const body=m.type==='text'?String(m.text?.body||'').slice(0,1600):`[${String(m.type||'unsupported').slice(0,30)} message]`;
+     await ingestInbound(db,workspace,{id:m.id,phone:toE164(m.from),name:names.get(m.from),body,at:m.timestamp?new Date(Number(m.timestamp)*1000):undefined});
+    }
+    for(const st of Array.isArray(v.statuses)?v.statuses:[]){
+     if(typeof st?.id!=='string'||typeof st?.status!=='string')continue;
+     if(!await recordEvent(db,workspace,c.id,{eventId:`${st.id}:${st.status}`,direction:'in',type:'message.status',summary:{id:st.id,status:st.status,timestamp:st.timestamp}}))continue;
+     const mapped=st.status==='delivered'||st.status==='read'?'delivered':st.status==='failed'?'failed':st.status==='sent'?'sent':'queued';
+     const err=Array.isArray(st.errors)?st.errors[0]:undefined;
+     const row=(await db.query("SELECT id,status FROM messages WHERE workspace_id=$1 AND provider_id=$2 AND direction='out' FOR UPDATE",[workspace,st.id])).rows[0];
+     if(row&&(rank[mapped]>=(rank[row.status]??0)))await db.query('UPDATE messages SET status=$3,error_code=$4 WHERE id=$1 AND workspace_id=$2',[row.id,workspace,mapped,mapped==='failed'?explainMeta(400,{code:err?.code,message:err?.title}).slice(0,300):null]);
+     if(mapped==='failed')await markResult(db,c.id,workspace,false,`Message ${st.id} failed (code ${err?.code??'unknown'}).`);
+    }
+   }
+   await markResult(db,c.id,workspace,true);
+   return {received:true};
   });
  }
  @Post('stripe/:ws')@HttpCode(200)async stripe(@Req()req:Request,@Param('ws')ws:string,@Res({passthrough:true})res:Response){

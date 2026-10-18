@@ -25,6 +25,13 @@ Dev: `cloudflared tunnel --url http://localhost:3001` (or `ngrok http 3001`). Us
 3. **Google Calendar** – Google Cloud project → enable Calendar API → OAuth consent screen (Testing, add test users) → OAuth client (Web). Redirect URI `https://<public>/api/oauth/google/callback`. Needs Client ID + Secret.
 4. **Telegram (notifications)** – talk to @BotFather → `/newbot` → token. Each employee messages the bot once, then enters their chat id on their profile.
 
+## WhatsApp via Meta Cloud API (alternative to Twilio)
+Per-workspace, entered on the Integrations page (encrypted at rest): access token, app secret, a verify token you invent, Phone number ID (and optionally the WhatsApp Business Account ID).
+- Callback URL (shown on the page): `https://<public>/api/webhooks/whatsapp/<workspaceId>`. In Meta → WhatsApp → Configuration, paste it with the same verify token, then subscribe to the `messages` field.
+- The app secret is under App settings → Basic. The temporary test token expires after about 24 hours; replace it on the Integrations page.
+- Free-form replies work only within 24 hours of the customer's last message; otherwise send an approved template. Test numbers reach only allowed recipients.
+- `META_GRAPH_API_VERSION` (optional, default `v23.0`) sets the Graph API version.
+
 ## Alternatives to Twilio
 Requirement I1 names Twilio, but accepts equivalents only as SMS; if you swap, keep the same adapter interface (verify signature, send, status callback, dedupe by message id).
 - **Meta WhatsApp Cloud API** – free test number, official, closest to the Twilio sandbox. Best swap.
