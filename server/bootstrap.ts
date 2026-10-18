@@ -45,7 +45,7 @@ export async function buildBootstrap(db:DB,ctx:Context){
  const [dest]=await q("SELECT address FROM notification_destinations WHERE workspace_id=$1 AND member_id=$2 AND provider='email'",[ctx.memberId]);
  const calendarRows=await q("SELECT member_id,status FROM integrations WHERE workspace_id=$1 AND provider='google' AND member_id IS NOT NULL AND ($2::boolean OR member_id=$3)",[ctx.permissions.has('integration.manage'),ctx.memberId]);
  const providerRows=await q('SELECT provider,status FROM integrations WHERE workspace_id=$1 AND member_id IS NULL');
- const notifications=await q('SELECT id,lead_id,kind,body,created_at,read_at FROM notifications WHERE workspace_id=$1 AND member_id=$2 ORDER BY created_at DESC LIMIT 50',[ctx.memberId]);
+ const notifications=await q('SELECT n.id,n.lead_id,n.kind,n.body,n.created_at,n.read_at,c.name AS lead_name FROM notifications n LEFT JOIN leads l ON l.id=n.lead_id AND l.workspace_id=n.workspace_id LEFT JOIN contacts c ON c.id=l.contact_id AND c.workspace_id=l.workspace_id WHERE n.workspace_id=$1 AND n.member_id=$2 ORDER BY n.created_at DESC LIMIT 100',[ctx.memberId]);
 
  const primary=pipelines[0];
  const stages=stageRows.filter(s=>s.pipeline_id===primary?.id);

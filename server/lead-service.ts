@@ -19,7 +19,8 @@ export async function routeLead(db:DB,workspace:string,lead:any,rules:any,reason
  if(owner)await db.query('UPDATE memberships SET last_assigned_at=now() WHERE id=$1 AND workspace_id=$2',[owner,workspace]);
  await db.query('UPDATE contacts SET owner_id=$1,version=version+1 WHERE id=$2 AND workspace_id=$3',[accountable,lead.contact_id,workspace]);
  await db.query('INSERT INTO lead_assignments(workspace_id,lead_id,from_member_id,to_member_id,accountable_member_id,reason,lead_version) VALUES($1,$2,$3,$4,$5,$6,$7)',[workspace,lead.id,lead.current_owner_id,owner,accountable,reason,updated.version]);
- await db.query('INSERT INTO notifications(workspace_id,member_id,lead_id,kind,body) VALUES($1,$2,$3,$4,$5)',[workspace,accountable,lead.id,reason,owner?'A lead needs your acknowledgment.':'No eligible assignee. This lead needs managerial recovery.']);
+ const leadName=(await db.query('SELECT name FROM contacts WHERE id=$1 AND workspace_id=$2',[lead.contact_id,workspace])).rows[0]?.name||'A lead';
+ await db.query('INSERT INTO notifications(workspace_id,member_id,lead_id,kind,body) VALUES($1,$2,$3,$4,$5)',[workspace,accountable,lead.id,reason,owner?(expired?`${leadName} was escalated to you. Please acknowledge it.`:`${leadName} needs your acknowledgment.`):`${leadName} has no eligible assignee and needs manager recovery.`]);
  await db.query('INSERT INTO outbox_events(workspace_id,kind,payload,dedupe_key) VALUES($1,$2,$3,$4)',[workspace,expired||!owner?'lead.escalated':'lead.assigned',JSON.stringify({leadId:lead.id,memberId:accountable,version:updated.version,reason}),`assignment:${lead.id}:${updated.version}`]);
  await audit(db,workspace,actor,reason,lead.id,{owner:lead.current_owner_id,version:lead.version},{owner,accountable,version:updated.version});
  return updated;
