@@ -119,7 +119,7 @@ test('email alerts: escalation reaches the chosen address with a useful message'
  const sent=await escalate(c,'Escalate Me');
  assert.ok(sent.length>=1,'alert was delivered within the window');
  const mail=JSON.parse(sent[0].body);assert.deepEqual(mail.to,['alerts@example.com']);assert.match(mail.subject,/Escalate Me/);assert.match(mail.text,/Source: Website/);assert.match(mail.text,/Reason:/);assert.match(mail.text,/\/\?lead=/);assert.match(mail.html,/Open the lead/);assert.match(mail.from,/onboarding@resend\.dev/);
- const events=await c.call('GET','/integrations/events');assert.ok(events.body.some((e:any)=>e.event_type==='alert.email'&&e.status==='ok'));assert.ok(!JSON.stringify(events.body).includes('re_test_123456'));
+ const events=await c.call('GET','/integrations/events');assert.ok(events.body.some((e:any)=>e.event_type==='alert.email'&&e.status==='ok'));const notes=await c.call('GET','/notifications');assert.ok(notes.body.some((n:any)=>n.kind==='email'&&/Escalate Me/.test(n.body)&&/alerts@example\.com/.test(n.body)),'the dashboard shows the email notification');assert.ok(!JSON.stringify(events.body).includes('re_test_123456'));
 });
 
 test('email alerts: default to the login email, and a rejected key is reported',async()=>{

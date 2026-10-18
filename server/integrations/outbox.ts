@@ -27,8 +27,9 @@ async function deliverEscalation(db:DB,ws:string,p:{leadId:string;memberId:strin
  const link=`${publicBase()}/?lead=${lead.id}`;
  const text=`Lead escalated to you: ${lead.name}\nSource: ${lead.source}\nReason: ${reasons[p.reason]||p.reason}\nOpen: ${link}`;
  const r=await sendEmail(fetchImpl,{apiKey:mail.secrets.apiKey,from:mail.config.fromAddress||DEFAULT_FROM,to:dest.address,subject:`Lead escalated to you: ${lead.name}`,text,link,idempotencyKey:`escalation-${lead.id}-${p.memberId}-${p.version??lead.version}`});
- if(r.ok){await recordEvent(db,ws,mail.id,{direction:'out',type:'alert.email',summary:{leadId:lead.id,memberId:p.memberId}});await markResult(db,mail.id,ws,true);return {ok:true};}
+ if(r.ok){await recordEvent(db,ws,mail.id,{direction:'out',type:'alert.email',summary:{leadId:lead.id,memberId:p.memberId}});await markResult(db,mail.id,ws,true);await db.query("INSERT INTO notifications(workspace_id,member_id,lead_id,kind,body) VALUES($1,$2,$3,'email',$4)",[ws,p.memberId,lead.id,`Escalation email for ${lead.name} was sent to ${dest.address}.`]);return {ok:true};}
  await recordEvent(db,ws,mail.id,{direction:'out',type:'alert.email',status:r.transient?'retrying':'failed',summary:{leadId:lead.id,memberId:p.memberId},error:r.reason});await markResult(db,mail.id,ws,false,r.reason);
+ if(!r.transient)await db.query("INSERT INTO notifications(workspace_id,member_id,lead_id,kind,body) VALUES($1,$2,$3,'email_failed',$4)",[ws,p.memberId,lead.id,`Escalation email for ${lead.name} could not be sent: ${r.reason}`.slice(0,300)]);
  return {ok:false,permanent:!r.transient,reason:r.reason};
 }
 export async function outboxTick(){for(const w of (await pool.query('SELECT id FROM workspaces')).rows)await processOutbox(w.id);}
