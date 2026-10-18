@@ -89,14 +89,17 @@ export class ChannelController{
    return {o,c,paymentId:p.id as string};
   });
   const r=await createCheckout(http,{accessToken:prep.c.secrets.accessToken,productId:prep.c.config.productId,paymentId:prep.paymentId,amountMinor:f.amountMinor,currency:f.currency,successUrl:`${publicBase()}/?payment=success`,email:prep.o.email||undefined,name:prep.o.name});
-  return transaction(ctx.workspaceId,async db=>{
-   if(!r.ok){await db.query("UPDATE payments SET status='failed' WHERE id=$1 AND workspace_id=$2",[prep.paymentId,ctx.workspaceId]);await recordEvent(db,ctx.workspaceId,prep.c.id,{direction:'out',type:'checkout.create',status:'failed',error:r.reason});await markResult(db,prep.c.id,ctx.workspaceId,false,r.reason);throw new HttpException(r.reason,502);}
+  const out=await transaction(ctx.workspaceId,async db=>{
+   if(!r.ok){await db.query("UPDATE payments SET status='failed' WHERE id=$1 AND workspace_id=$2",[prep.paymentId,ctx.workspaceId]);await recordEvent(db,ctx.workspaceId,prep.c.id,{direction:'out',type:'checkout.create',status:'failed',error:r.reason});await markResult(db,prep.c.id,ctx.workspaceId,false,r.reason);return {failure:r.reason};}
    await db.query('UPDATE payments SET provider_reference=$3,checkout_url=$4 WHERE id=$1 AND workspace_id=$2',[prep.paymentId,ctx.workspaceId,r.id,r.url]);
    await recordEvent(db,ctx.workspaceId,prep.c.id,{eventId:'out:'+r.id,direction:'out',type:'checkout.create',summary:{paymentId:prep.paymentId,session:r.id}});await markResult(db,prep.c.id,ctx.workspaceId,true);
    await addActivity(db,ctx.workspaceId,prep.o.contact_id,ctx.memberId,'payment',`Payment request created for ${(f.amountMinor/100).toFixed(2)} ${f.currency}.`,prep.o.id);
    await audit(db,ctx.workspaceId,ctx.memberId,'payment.requested',prep.paymentId,null,{amountMinor:f.amountMinor,currency:f.currency});
    return {id:prep.paymentId,url:r.url};
   });
+  // Thrown after the transaction so the failed status and event are kept instead of rolled back.
+  if('failure' in out)throw new HttpException(String(out.failure),502);
+  return out as {id:string;url:string};
  }
 }
 
