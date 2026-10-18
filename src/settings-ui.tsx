@@ -3,7 +3,7 @@ import {Plus,Trash2,TriangleAlert} from 'lucide-react';
 import {api,errorText} from './api';
 type Member={id:string;name:string;email:string;baseLevel?:string;roleIds?:string[]};
 type Role={id:string;name:string;permissions:string[]};
-const PERMS:[string,string][]=[['crm.view','View own records'],['crm.view_all','View all records'],['crm.create','Create records'],['crm.edit','Edit records'],['crm.delete','Delete / archive'],['crm.export','Export'],['opportunity.value','See opportunity values'],['assignment.manage','Manage assignment rules'],['integration.manage','Manage integrations'],['audit.view','View audit log'],['workspace.manage','Manage workspace']];
+const PERMS:[string,string][]=[['crm.view','View own records'],['crm.view_all','View all records'],['crm.create','Create records'],['crm.edit','Edit records'],['crm.delete','Delete / archive'],['crm.export','Export'],['opportunity.value','See opportunity values'],['assignment.manage','Manage assignment rules'],['integration.manage','Manage integrations'],['audit.view','View audit log'],['config.manage','Manage pipelines & fields'],['workspace.manage','Manage workspace']];
 type Props={canManage:boolean;isOwner:boolean;run:(fn:()=>Promise<unknown>,ok:string)=>Promise<boolean>;notify:(t:string,e?:boolean)=>void};
 
 /** Roles are permission sets. Owner is always all-powerful; Admin and User levels get extra permissions from assigned roles. */

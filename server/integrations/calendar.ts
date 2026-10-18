@@ -6,10 +6,13 @@ import {context} from '../auth.js';
 import {requirePermission,requireRecord} from '../policy.js';
 import {scoped} from '../scope.js';
 import {addActivity} from '../intake.js';
+import {acknowledgeOnAction} from '../lead-service.js';
 import {credentials,saveIntegration,getIntegration,recordEvent,markResult,publicBase} from './registry.js';
 import {signState,verifyState} from './secrets.js';
 import {authUrl,exchangeCode,refresh,busyTimes,overlaps,createEvent,patchEvent,deleteEvent,Tokens} from './google.js';
 import {http} from './manage.js';
+/** Runs a transaction that may report a provider failure. The failure is thrown after commit so the failed-operation record is kept. */
+async function inTx<T>(ws:string,fn:(db:DB)=>Promise<T|{failure:string}>):Promise<T>{const out=await transaction(ws,fn as (db:DB)=>Promise<unknown>);if(out&&typeof out==='object'&&'failure' in (out as object))throw new HttpException(String((out as {failure:string}).failure),502);return out as T;}
 const uuid=z.uuid();
 const redirectUri=()=>`${publicBase()}/api/oauth/google/callback`;
 const tz=z.string().max(64).refine(v=>{try{new Intl.DateTimeFormat('en',{timeZone:v});return true}catch{return false}},'Unknown time zone');
@@ -76,8 +79,9 @@ export class CalendarController{
   const clash=overlaps(b.busy,f.startsAt,f.endsAt);
   if(clash.length&&!f.force)throw new HttpException(`This time overlaps ${clash.length} existing event${clash.length>1?'s':''} on the calendar. Choose another time or confirm to double-book.`,409);
   const e=await createEvent(http,token,{title:f.title,start:f.startsAt,end:f.endsAt,timezone:f.timezone,attendeeEmail:contact.email||undefined});
-  return transaction(ctx.workspaceId,async db=>{
-   if(!e.ok){await recordEvent(db,ctx.workspaceId,integrationId,{direction:'out',type:'event.create',status:'failed',error:e.reason});await markResult(db,integrationId,ctx.workspaceId,false,e.reason);throw new HttpException(e.reason,502);}
+  return inTx(ctx.workspaceId,async db=>{
+   if(!e.ok){await recordEvent(db,ctx.workspaceId,integrationId,{direction:'out',type:'event.create',status:'failed',error:e.reason});await markResult(db,integrationId,ctx.workspaceId,false,e.reason);return {failure:e.reason};}
+   await acknowledgeOnAction(db,ctx,contact.id);
    const a=(await db.query("INSERT INTO appointments(workspace_id,contact_id,employee_id,title,starts_at,ends_at,timezone,provider_event_id,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'confirmed') RETURNING id",[ctx.workspaceId,contact.id,employee,f.title,f.startsAt,f.endsAt,f.timezone,e.id])).rows[0];
    await recordEvent(db,ctx.workspaceId,integrationId,{eventId:'out:'+e.id,direction:'out',type:'event.create',summary:{appointmentId:a.id}});await markResult(db,integrationId,ctx.workspaceId,true);
    await addActivity(db,ctx.workspaceId,contact.id,ctx.memberId,'appointment',`Appointment booked: ${f.title} (${f.startsAt}, ${f.timezone}).`);
@@ -88,13 +92,17 @@ export class CalendarController{
  }
  @Patch('appointments/:id')async reschedule(@Req()req:Request,@Param('id')id:string){
   const ctx=await context(req);requirePermission(ctx,'crm.edit');
-  const f=z.object({startsAt:z.iso.datetime({offset:true}),endsAt:z.iso.datetime({offset:true}),timezone:tz.optional()}).strict().parse(req.body);
+  const f=z.object({startsAt:z.iso.datetime({offset:true}),endsAt:z.iso.datetime({offset:true}),timezone:tz.optional(),force:z.boolean().default(false)}).strict().parse(req.body);
   if(Date.parse(f.endsAt)<=Date.parse(f.startsAt))throw new HttpException('The appointment must end after it starts.',400);
   const a=await transaction(ctx.workspaceId,async db=>{const x=await lockAppointment(db,ctx.workspaceId,id);if(x.employee_id!==ctx.memberId)requirePermission(ctx,'assignment.manage');if(x.status==='cancelled')throw new HttpException('This appointment was cancelled.',409);return x;});
   const {token,integrationId}=await freshToken(ctx.workspaceId,a.employee_id);
+  const busy=await busyTimes(http,token,f.startsAt,f.endsAt);if(!busy.ok)throw new HttpException(busy.reason,502);
+  const sameSlot=(x:string)=>Math.abs(Date.parse(x)-new Date(a.starts_at).getTime())<1000||Math.abs(Date.parse(x)-new Date(a.ends_at).getTime())<1000;
+  const clash=overlaps(busy.busy.filter((x:{start:string;end:string})=>!(sameSlot(x.start)&&sameSlot(x.end))),f.startsAt,f.endsAt);
+  if(clash.length&&!f.force)throw new HttpException(`This time overlaps ${clash.length} existing event${clash.length>1?'s':''} on the calendar. Choose another time or confirm to double-book.`,409);
   const r=await patchEvent(http,token,a.provider_event_id,{start:f.startsAt,end:f.endsAt,timezone:f.timezone||a.timezone});
-  return transaction(ctx.workspaceId,async db=>{
-   if(!r.ok){await recordEvent(db,ctx.workspaceId,integrationId,{direction:'out',type:'event.update',status:'failed',error:r.reason});throw new HttpException(r.reason,502);}
+  return inTx(ctx.workspaceId,async db=>{
+   if(!r.ok){await recordEvent(db,ctx.workspaceId,integrationId,{direction:'out',type:'event.update',status:'failed',error:r.reason});await markResult(db,integrationId,ctx.workspaceId,false,r.reason);return {failure:r.reason};}
    await db.query('UPDATE appointments SET starts_at=$3,ends_at=$4,timezone=$5 WHERE id=$1 AND workspace_id=$2',[a.id,ctx.workspaceId,f.startsAt,f.endsAt,f.timezone||a.timezone]);
    await recordEvent(db,ctx.workspaceId,integrationId,{direction:'out',type:'event.update',summary:{appointmentId:a.id}});await markResult(db,integrationId,ctx.workspaceId,true);
    await addActivity(db,ctx.workspaceId,a.contact_id,ctx.memberId,'appointment',`Appointment rescheduled to ${f.startsAt}.`);await audit(db,ctx.workspaceId,ctx.memberId,'appointment.rescheduled',a.id,{startsAt:a.starts_at},{startsAt:f.startsAt});
@@ -106,8 +114,8 @@ export class CalendarController{
   const a=await transaction(ctx.workspaceId,async db=>{const x=await lockAppointment(db,ctx.workspaceId,id);if(x.employee_id!==ctx.memberId)requirePermission(ctx,'assignment.manage');return x;});
   if(a.status==='cancelled')return {ok:true};
   const {token,integrationId}=await freshToken(ctx.workspaceId,a.employee_id);const r=await deleteEvent(http,token,a.provider_event_id);
-  return transaction(ctx.workspaceId,async db=>{
-   if(!r.ok){await recordEvent(db,ctx.workspaceId,integrationId,{direction:'out',type:'event.cancel',status:'failed',error:r.reason});throw new HttpException(r.reason,502);}
+  return inTx(ctx.workspaceId,async db=>{
+   if(!r.ok){await recordEvent(db,ctx.workspaceId,integrationId,{direction:'out',type:'event.cancel',status:'failed',error:r.reason});await markResult(db,integrationId,ctx.workspaceId,false,r.reason);return {failure:r.reason};}
    await db.query("UPDATE appointments SET status='cancelled' WHERE id=$1 AND workspace_id=$2",[a.id,ctx.workspaceId]);
    await recordEvent(db,ctx.workspaceId,integrationId,{direction:'out',type:'event.cancel',summary:{appointmentId:a.id}});
    await addActivity(db,ctx.workspaceId,a.contact_id,ctx.memberId,'appointment','Appointment cancelled.');await audit(db,ctx.workspaceId,ctx.memberId,'appointment.cancelled',a.id,null,null);

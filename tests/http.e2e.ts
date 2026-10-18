@@ -79,3 +79,52 @@ test('roles, escalation chain, second pipeline, audit filters and live events',a
  // The stream refuses unauthenticated clients.
  assert.equal((await fetch(`${base}/events?ws=${A.workspace.id}`)).status,401);
 });
+
+test('Admin configures the CRM; custom field values reach opportunities; Users cannot configure',async()=>{
+ const a=new Client();const A=await a.signup('Cfg');
+ const join=async(level:'Admin'|'User')=>{const email=`${level.toLowerCase()}-${crypto.randomUUID().slice(0,8)}@e2e.test`;const inv=await a.call('POST','/invitations',{email,baseLevel:level});assert.equal(inv.status,201,'invite '+level+': '+JSON.stringify(inv.body));const c=new Client();const acc=await c.call('POST','/public/accept-invite',{token:new URL(inv.body.link).searchParams.get('invite')!,workspaceId:A.workspace.id,email,password:'correct-horse-battery',name:level+' Person'});assert.equal(acc.status,201,'accept '+level+': '+JSON.stringify(acc.body));c.csrf=acc.body.csrf;c.ws=A.workspace.id;return c;};
+ const admin=await join('Admin'),user=await join('User');
+ const boot=await a.call('GET','/bootstrap');const pipelineId=boot.body.meta.pipelineId;
+ const field=await admin.call('POST','/custom-fields',{pipelineId,name:'Budget tier',type:'dropdown',options:['Low','High']});assert.equal(field.status,201,'Admin can add fields: '+JSON.stringify(field.body));
+ assert.equal((await admin.call('POST','/pipelines',{name:'Renewals'})).status,201,'Admin can add pipelines');
+ assert.equal((await admin.call('POST','/stages',{pipelineId,name:'Legal'})).status,201,'Admin can add stages');
+ assert.equal((await admin.call('PATCH','/workspace',{name:'Hijack'})).status,403,'Admin cannot rename the workspace');
+ assert.equal((await user.call('POST','/custom-fields',{pipelineId,name:'Nope',type:'text'})).status,403,'User cannot add fields');
+ assert.equal((await user.call('POST','/stages',{pipelineId,name:'Nope'})).status,403,'User cannot add stages');
+ // Values are validated by type and appear on the opportunity.
+ const lead=await a.call('POST','/leads',{name:'Field Person',company:'Field Co',source:'Manual'});assert.equal(lead.status,201);
+ const b2=await a.call('GET','/bootstrap');const contactId=b2.body.data.leads[0].contactId;
+ const opp=await a.call('POST','/opportunities',{contactId,pipelineId,stageId:b2.body.meta.pipelineList.find((p:any)=>p.id===pipelineId).stages[0].id,name:'With fields',valueMinor:1000,currency:'USD',closeDate:'2026-12-01',nextStep:'Call on Monday'});assert.equal(opp.status,201,'opp: '+JSON.stringify(opp.body));
+ const fieldId=field.body.id;
+ assert.equal((await a.call('PUT',`/opportunities/${opp.body.id}/fields/${fieldId}`,{version:opp.body.version,value:'Medium'})).status,400,'dropdown rejects unknown options');
+ const saved=await a.call('PUT',`/opportunities/${opp.body.id}/fields/${fieldId}`,{version:opp.body.version,value:'High'});assert.equal(saved.status,200);
+ const deal=(await a.call('GET','/bootstrap')).body.data.deals.find((d:any)=>d.id===opp.body.id);
+ assert.equal(deal.fields[fieldId],'High');assert.equal(deal.nextStep,'Call on Monday');assert.equal(deal.closeDate.slice(0,10),'2026-12-01');
+});
+
+test('acting on a lead acknowledges it; the fallback manager is configurable',async()=>{
+ const a=new Client();await a.signup('Ack');
+ const lead=await a.call('POST','/leads',{name:'Stage Mover',company:'Move Co',source:'Manual'});assert.equal(lead.status,201);
+ const boot=await a.call('GET','/bootstrap');const pipelineId=boot.body.meta.pipelineId;const contactId=boot.body.data.leads[0].contactId;
+ const stages=boot.body.meta.pipelineList.find((p:any)=>p.id===pipelineId).stages;
+ const opp=await a.call('POST','/opportunities',{contactId,pipelineId,stageId:stages[0].id,name:'Acts',valueMinor:500,currency:'USD'});assert.equal(opp.status,201);
+ assert.equal((await a.call('GET','/leads')).body.records[0].status,'new');
+ const moved=await a.call('PATCH',`/opportunities/${opp.body.id}/stage`,{version:opp.body.version,stageId:stages[1].id});assert.equal(moved.status,200,JSON.stringify(moved.body));
+ assert.equal((await a.call('GET','/leads')).body.records[0].status,'acknowledged','a stage change by the assignee acknowledges the lead');
+ // Fallback manager: must be an active member of this workspace.
+ const rules=boot.body.meta;const me=boot.body.meta.workspaceId&&boot.body.data.team[0].id;
+ const ok=await a.call('PUT','/assignment-rules',{version:rules.rulesVersion,ackSeconds:600,idleSeconds:3600,maxEscalations:3,managerId:me});assert.equal(ok.status,200,JSON.stringify(ok.body));
+ assert.equal((await a.call('GET','/bootstrap')).body.data.settings.managerId,me);
+ const bad=await a.call('PUT','/assignment-rules',{version:ok.body.version,ackSeconds:600,idleSeconds:3600,maxEscalations:3,managerId:crypto.randomUUID()});assert.equal(bad.status,400);
+});
+
+test('currency is locked once money records exist; payments keep their own currency',async()=>{
+ const a=new Client();await a.signup('Cur');
+ assert.equal((await a.call('PATCH','/workspace',{currency:'PKR'})).status,200,'currency can change while the workspace is empty');
+ await a.call('POST','/leads',{name:'Cur Person',company:'Cur Co',source:'Manual'});
+ const boot=await a.call('GET','/bootstrap');const pipelineId=boot.body.meta.pipelineId;const stages=boot.body.meta.pipelineList.find((p:any)=>p.id===pipelineId).stages;
+ const opp=await a.call('POST','/opportunities',{contactId:boot.body.data.leads[0].contactId,pipelineId,stageId:stages[0].id,name:'Priced',valueMinor:250000,currency:'PKR'});assert.equal(opp.status,201);
+ const locked=await a.call('PATCH','/workspace',{currency:'USD'});assert.equal(locked.status,409);assert.match(locked.body.error,/cannot be changed/);
+ assert.equal((await a.call('PATCH','/workspace',{name:'Renamed'})).status,200,'renaming still works');
+ assert.equal((await a.call('GET','/bootstrap')).body.data.deals[0].currency,'PKR');
+});

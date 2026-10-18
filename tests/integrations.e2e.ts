@@ -85,7 +85,7 @@ test('polar: checkout, signed webhooks, idempotency, expiry and refunds',async()
  assert.equal(await post({type:'refund.created',data:{id:'re_1',status:'pending',amount:20000,order_id:'order_1',currency:'usd'}},'msg_2'),200);
  assert.equal((await c.call('GET','/bootstrap')).body.data.payments[0].amount,500,'a pending refund changes nothing');
  assert.equal(await post({type:'refund.updated',data:{id:'re_1',status:'succeeded',amount:20000,order_id:'order_1',currency:'usd'}},'msg_3'),200);
- p=(await c.call('GET','/bootstrap')).body.data;assert.equal(p.payments[0].status,'Paid');assert.equal(p.payments[0].amount,300,'partial refund reduces collected revenue');
+ p=(await c.call('GET','/bootstrap')).body.data;assert.equal(p.payments[0].status,'Partially refunded');assert.equal(p.payments[0].amount,300,'partial refund reduces collected revenue');assert.equal(p.payments[0].refunded,200);assert.equal(p.payments[0].total,500);assert.equal(p.payments[0].currency,'USD');assert.ok(p.payments[0].requestedBy,'payment is traceable to the employee who requested it');
  assert.equal(await post({type:'refund.updated',data:{id:'re_1',status:'succeeded',amount:20000,order_id:'order_1',currency:'usd'}},'msg_3b'),200);
  assert.equal((await c.call('GET','/bootstrap')).body.data.payments[0].amount,300,'the same refund is never counted twice');
  assert.equal(await post({type:'refund.created',data:{id:'re_2',status:'succeeded',amount:30000,order_id:'order_1',currency:'usd'}},'msg_4'),200);

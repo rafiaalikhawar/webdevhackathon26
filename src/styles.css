@@ -44,3 +44,15 @@
 .resx-tagline{display:block;margin-top:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;letter-spacing:.28em;color:#6b6f7a}
 .brand-lockup{flex-direction:column;align-items:flex-start;gap:0}
 .sidebar .brand{display:flex;align-items:center;padding:6px 4px}
+
+.deal-fields{display:grid;gap:10px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)}
+.deal-fields h4{margin:0;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.check-row{display:flex;align-items:center;gap:8px}
+.check-row input{width:auto}
+
+.msg-error{display:block;font-style:normal;color:#a1442c;font-size:12px;margin-top:2px}
+.refund-note{color:#7a869b}
+.drill-banner{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.drill-banner .text-btn{margin-left:auto}
+
+.pager{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 4px;font-size:13px;color:var(--muted)}

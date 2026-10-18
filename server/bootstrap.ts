@@ -4,7 +4,7 @@ import {Context} from './policy.js';
 const colors=['purple','blue','green','amber','rose'];
 const initialsOf=(s:string)=>s.split(' ').map(p=>p[0]).slice(0,2).join('').toUpperCase();
 const titleCase=(s:string)=>s.charAt(0).toUpperCase()+s.slice(1);
-const paymentLabel:Record<string,string>={pending:'Pending',paid:'Paid',failed:'Failed',expired:'Expired',refunded:'Refunded',partially_refunded:'Paid'};
+const paymentLabel:Record<string,string>={pending:'Pending',paid:'Paid',failed:'Failed',expired:'Expired',refunded:'Refunded',partially_refunded:'Partially refunded'};
 
 /** One permission-aware snapshot shaped for the web client. All reads happen inside the caller's workspace transaction. */
 export async function buildBootstrap(db:DB,ctx:Context){
@@ -30,6 +30,7 @@ export async function buildBootstrap(db:DB,ctx:Context){
    JOIN stages s ON s.id=o.stage_id AND s.workspace_id=o.workspace_id JOIN pipelines p ON p.id=o.pipeline_id AND p.workspace_id=o.workspace_id
    JOIN contacts c ON c.id=o.contact_id AND c.workspace_id=o.workspace_id JOIN companies co ON co.id=c.company_id AND co.workspace_id=c.workspace_id
    WHERE o.workspace_id=$1 AND o.archived_at IS NULL AND ($2::boolean OR o.owner_id=$3) ORDER BY o.close_date NULLS LAST LIMIT 500`,[all,ctx.memberId]);
+ const fieldVals=dealRows.length?await q('SELECT opportunity_id,field_id,value FROM custom_field_values WHERE workspace_id=$1 AND opportunity_id=ANY($2::uuid[])',[dealRows.map((d:any)=>d.id)]):[];
  const activities=contactIds.length?await q('SELECT a.*,u.name AS actor_name FROM activities a LEFT JOIN memberships m ON m.id=a.actor_id AND m.workspace_id=a.workspace_id LEFT JOIN users u ON u.id=m.user_id WHERE a.workspace_id=$1 AND a.contact_id=ANY($2::uuid[]) ORDER BY a.created_at DESC LIMIT 400',[contactIds]):[];
  const assignments=contactIds.length?await q('SELECT la.*,u.name AS to_name FROM lead_assignments la LEFT JOIN memberships m ON m.id=la.accountable_member_id AND m.workspace_id=la.workspace_id LEFT JOIN users u ON u.id=m.user_id WHERE la.workspace_id=$1 AND la.lead_id=ANY($2::uuid[]) ORDER BY la.assigned_at DESC LIMIT 400',[leadRows.map(l=>l.id)]):[];
  const audit=ctx.permissions.has('audit.view')?await q('SELECT a.*,u.name AS actor_name FROM audit_logs a LEFT JOIN memberships m ON m.id=a.actor_id AND m.workspace_id=a.workspace_id LEFT JOIN users u ON u.id=m.user_id WHERE a.workspace_id=$1 ORDER BY a.created_at DESC LIMIT 200'):[];
@@ -62,12 +63,12 @@ export async function buildBootstrap(db:DB,ctx:Context){
   data:{
    team:members.map((m,i)=>({id:m.id,name:m.name,initials:initialsOf(m.name),role:m.roles||(m.base_level==='User'?'Sales':m.base_level),status:m.availability,capacity:m.capacity,color:colors[i%colors.length],email:m.email,baseLevel:m.base_level,openLeads:m.open_leads,roleIds:m.role_ids})),
    leads:leadRows.map(l=>({id:l.id,contactId:l.contact_id,name:l.name,company:l.company,email:l.email||'',phone:l.phone||'',optedOut:l.opted_out,source:l.source,owner:l.current_owner_id||l.accountable_member_id,status:titleCase(l.status),createdAt:l.created_at,deadline:l.acknowledgment_deadline||l.created_at,acknowledgedAt:l.acknowledged_at||undefined,firstAssignedAt:l.first_assigned_at||l.created_at,escalations:l.escalation_count,lastActivity:l.last_activity_at,version:l.version,waiting:l.waiting_for_assignment,value:values?Number(l.value_minor)/100:0,tags:[]})),
-   deals:dealRows.map(d=>({id:d.id,name:d.name,company:d.company,contactId:leadByContact.get(d.contact_id)||d.contact_id,stage:d.stage_name,value:values?Number(d.value_minor)/100:0,owner:d.owner_id,closeDate:d.close_date||'',pipeline:d.pipeline_name,nextStep:'',version:d.version})),
+   deals:dealRows.map(d=>({id:d.id,name:d.name,company:d.company,contactId:leadByContact.get(d.contact_id)||d.contact_id,stage:d.stage_name,value:values?Number(d.value_minor)/100:0,owner:d.owner_id,closeDate:d.close_date?(d.close_date instanceof Date?d.close_date.toLocaleDateString('en-CA'):String(d.close_date).slice(0,10)):'',pipeline:d.pipeline_name,pipelineId:d.pipeline_id,currency:d.currency,fields:Object.fromEntries(fieldVals.filter((v:any)=>v.opportunity_id===d.id).map((v:any)=>[v.field_id,v.value])),nextStep:d.next_step||'',version:d.version})),
    stages:stages.map(s=>s.name),events,
    meetings:appts.map(a=>({id:a.id,title:a.title,contactId:leadByContact.get(a.contact_id)||a.contact_id,owner:a.employee_id,at:a.starts_at,duration:Math.round((Date.parse(a.ends_at)-Date.parse(a.starts_at))/60000),timezone:a.timezone,status:titleCase(a.status)})),
-   chats:convs.map(c=>({id:c.id,leadId:leadByContact.get(c.contact_id)||'',channel:c.channel,messages:msgs.filter(m=>m.conversation_id===c.id).map(m=>({id:m.id,text:m.body,direction:m.direction,at:m.created_at,status:titleCase(m.status)}))})),
-   payments:pays.map(p=>({id:p.id,leadId:leadByContact.get(p.contact_id)||'',dealId:p.opportunity_id,amount:values?(Number(p.amount_minor)-Number(p.refunded_minor))/100:0,status:paymentLabel[p.status]||p.status,at:p.confirmed_at||p.created_at,ref:p.provider_reference||'',url:p.status==='pending'?p.checkout_url||'':''})),
-   settings:{ackSeconds:rules?.ack_seconds||600,idleHours:Math.round((rules?.idle_seconds||86400)/3600),maxLeads:members[0]?.capacity||8,workspace:ws?.name||'',currency:ws?.currency||'USD'},
+   chats:convs.map(c=>({id:c.id,leadId:leadByContact.get(c.contact_id)||'',channel:c.channel,messages:msgs.filter(m=>m.conversation_id===c.id).map(m=>({id:m.id,text:m.body,direction:m.direction,at:m.created_at,status:titleCase(m.status),error:m.status==='failed'?m.error_code||'':''}))})),
+   payments:pays.map(p=>({id:p.id,leadId:leadByContact.get(p.contact_id)||'',dealId:p.opportunity_id,amount:values?(Number(p.amount_minor)-Number(p.refunded_minor))/100:0,status:paymentLabel[p.status]||p.status,at:p.confirmed_at||p.created_at,ref:p.provider_reference||'',requestedBy:p.requested_by,currency:p.currency,total:values?Number(p.amount_minor)/100:0,refunded:values?Number(p.refunded_minor)/100:0,url:p.status==='pending'?p.checkout_url||'':''})),
+   settings:{ackSeconds:rules?.ack_seconds||600,idleHours:Math.round((rules?.idle_seconds||86400)/3600),maxLeads:members[0]?.capacity||8,workspace:ws?.name||'',currency:ws?.currency||'USD',managerId:rules?.manager_member_id||''},
    customFields:fields.filter(f=>f.pipeline_id===primary?.id).map(f=>({id:f.id,name:f.name,type:titleCase(f.type),requiredStage:f.required_stage||''})),
    visibleMetrics:prefs?.visible_metrics||['leads','value','response','revenue']
   }
