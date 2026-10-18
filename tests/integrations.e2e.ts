@@ -13,12 +13,12 @@ const mode={meta:'ok',twilio:'ok',telegram:'ok',google:'ok',busy:[] as {start:st
 let sid=0,lastTwilioSid='',lastMetaId='';
 
 const stub=http.createServer((req,res)=>{let body='';req.on('data',c=>body+=c);req.on('end',()=>{
- const url=req.url||'',provider=url.startsWith('/graph')?'graph':url.startsWith('/twilio')?'twilio':url.startsWith('/stripe')?'stripe':url.startsWith('/telegram')?'telegram':url.startsWith('/gtoken')?'gtoken':'gcal';
+ const url=req.url||'',provider=url.startsWith('/graph')?'graph':url.startsWith('/twilio')?'twilio':url.startsWith('/polar')?'polar':url.startsWith('/telegram')?'telegram':url.startsWith('/gtoken')?'gtoken':'gcal';
  calls.push({provider,method:req.method||'',path:url,body});
  const json=(s:number,o:unknown)=>{res.writeHead(s,{'Content-Type':'application/json'});res.end(s===204?'':JSON.stringify(o));};
  if(provider==='graph'){if(req.method==='GET')return json(200,{display_phone_number:'+1 555 000'});if(mode.meta==='expired')return json(401,{error:{code:190,message:'Session has expired'}});if(mode.meta==='window')return json(400,{error:{code:131047,message:'Re-engagement message'}});lastMetaId='wamid.OUT'+(++sid);return json(200,{messages:[{id:lastMetaId}]});}
  if(provider==='twilio'){if(url.endsWith('.json')&&req.method==='GET')return json(200,{sid:'AC1'});if(mode.twilio==='fail')return json(500,{message:'boom'});lastTwilioSid='SM'+(++sid);return json(201,{sid:lastTwilioSid});}
- if(provider==='stripe'){if(url.includes('/balance'))return json(200,{});return json(200,{id:'cs_test_'+(++sid),url:'https://checkout.stripe.test/pay/'+sid});}
+ if(provider==='polar'){if(req.method==='GET')return json(200,{id:'prod'});return json(201,{id:'co_test_'+(++sid),url:'https://sandbox.polar.test/checkout/'+sid,status:'open'});}
  if(provider==='telegram'){if(url.includes('getMe'))return json(200,{ok:true});if(mode.telegram==='unauthorized')return json(401,{ok:false,description:'Unauthorized'});return json(200,{ok:true});}
  if(provider==='gtoken'){const p=new URLSearchParams(body);if(p.get('grant_type')==='refresh_token'&&mode.google==='revoked')return json(400,{error:'invalid_grant'});return json(200,{access_token:'at-'+(++sid),refresh_token:p.get('grant_type')==='authorization_code'?'rt-1':undefined,expires_in:1});}
  if(url.includes('/freeBusy'))return json(200,{calendars:{primary:{busy:mode.busy}}});
@@ -28,7 +28,7 @@ const stub=http.createServer((req,res)=>{let body='';req.on('data',c=>body+=c);r
 
 let children:ChildProcess[]=[];
 const env={...process.env,PORT:String(API_PORT),NODE_ENV:'development',PUBLIC_BASE_URL:base,INTEGRATIONS_SKIP_VERIFY:'1',
- TWILIO_API_BASE:`http://localhost:${STUB_PORT}/twilio`,STRIPE_API_BASE:`http://localhost:${STUB_PORT}/stripe`,TELEGRAM_API_BASE:`http://localhost:${STUB_PORT}/telegram`,META_GRAPH_BASE:`http://localhost:${STUB_PORT}/graph`,GOOGLE_TOKEN_URL:`http://localhost:${STUB_PORT}/gtoken`,GOOGLE_CALENDAR_BASE:`http://localhost:${STUB_PORT}/gcal`};
+ TWILIO_API_BASE:`http://localhost:${STUB_PORT}/twilio`,POLAR_API_BASE:`http://localhost:${STUB_PORT}/polar`,TELEGRAM_API_BASE:`http://localhost:${STUB_PORT}/telegram`,META_GRAPH_BASE:`http://localhost:${STUB_PORT}/graph`,GOOGLE_TOKEN_URL:`http://localhost:${STUB_PORT}/gtoken`,GOOGLE_CALENDAR_BASE:`http://localhost:${STUB_PORT}/gcal`};
 before(async()=>{
  await new Promise<void>(r=>stub.listen(STUB_PORT,r));
  for(const script of ['server/main.ts','server/worker.ts'])children.push(spawn('node',['--import','tsx',script],{env:{...env,APP_ORIGIN:origin},stdio:['ignore','inherit','inherit']}));
@@ -43,7 +43,7 @@ class Client{cookies:Record<string,string>={};csrf='';ws='';
  async signup(){const email=`${crypto.randomUUID().slice(0,8)}@int.test`;const r=await this.call('POST','/auth/signup',{email,password:'correct-horse-battery',name:'Owner',workspace:'Int'});assert.equal(r.status,201,JSON.stringify(r.body));this.csrf=r.body.csrf;this.ws=r.body.workspace.id;return r.body;}}
 
 const twilioSig=(token:string,url:string,params:Record<string,string>)=>createHmac('sha1',token).update(url+Object.keys(params).sort().map(k=>k+params[k]).join('')).digest('base64');
-const stripeSig=(secret:string,payload:string,t=Math.floor(Date.now()/1000))=>`t=${t},v1=${createHmac('sha256',secret).update(`${t}.${payload}`).digest('hex')}`;
+const polarSig=(secret:string,id:string,payload:string,t=Math.floor(Date.now()/1000))=>({'webhook-id':id,'webhook-timestamp':String(t),'webhook-signature':'v1,'+createHmac('sha256',Buffer.from(secret.replace(/^whsec_/,''),'base64')).update(`${id}.${t}.${payload}`).digest('base64')});
 
 async function twilioPost(c:Client,kind:'inbound'|'status',params:Record<string,string>,token='tok',forge=false){
  const path=`/webhooks/twilio/${c.ws}/${kind}`;const sig=forge?'AAAA':twilioSig(token,`${base}/api${path}`,params);
@@ -51,20 +51,20 @@ async function twilioPost(c:Client,kind:'inbound'|'status',params:Record<string,
 
 async function setup(){
  const c=new Client();await c.signup();
- for(const [p,body] of Object.entries({twilio:{accountSid:'AC1',authToken:'tok',whatsappFrom:'+14155238886'},stripe:{secretKey:'sk_test_abc123',webhookSecret:'whsec_test'},telegram:{botToken:'123:ABCDEF'},google:{clientId:'cid',clientSecret:'csecret'}}))assert.equal((await c.call('PUT','/integrations/'+p,body)).status,200,p);
+ for(const [p,body] of Object.entries({twilio:{accountSid:'AC1',authToken:'tok',whatsappFrom:'+14155238886'},polar:{accessToken:'polar_oat_abc123',webhookSecret:'whsec_'+Buffer.from('polar-test-secret').toString('base64'),productId:'11111111-1111-4111-8111-111111111111'},telegram:{botToken:'123:ABCDEF'},google:{clientId:'cid',clientSecret:'csecret'}}))assert.equal((await c.call('PUT','/integrations/'+p,body)).status,200,p);
  return c;
 }
 
 test('secrets are encrypted at rest and masked in the API',async()=>{
  const c=await setup();const list=await c.call('GET','/integrations');assert.equal(list.status,200);
- const text=JSON.stringify(list.body);assert.ok(!text.includes('sk_test_abc123')&&!text.includes('whsec_test')&&!text.includes('123:ABCDEF'),'plaintext secret leaked');
- const stripe=list.body.find((p:any)=>p.provider==='stripe');assert.equal(stripe.status,'connected');assert.ok(stripe.secrets.secretKey.startsWith('••••'));assert.ok(stripe.limits.length>10);
+ const text=JSON.stringify(list.body);assert.ok(!text.includes('polar_oat_abc123')&&!text.includes('polar-test-secret')&&!text.includes('123:ABCDEF'),'plaintext secret leaked');
+ const polar=list.body.find((p:any)=>p.provider==='polar');assert.equal(polar.status,'connected');assert.ok(polar.secrets.accessToken.startsWith('••••'));assert.ok(polar.limits.length>10);assert.ok(!list.body.some((p:any)=>p.provider==='stripe'),'stripe is no longer offered');
  const user=new Client();Object.assign(user,{ws:c.ws});// a plain user cannot read or change integrations
  const inv=await c.call('POST','/invitations',{email:`u-${crypto.randomUUID().slice(0,6)}@int.test`,baseLevel:'User'});const token=new URL(inv.body.link).searchParams.get('invite')!;
  const email=JSON.parse(JSON.stringify(inv.body)).link&&`u-${crypto.randomUUID().slice(0,6)}@int.test`;void email;
  const inv2=await c.call('POST','/invitations',{email:'plain@int.test',baseLevel:'User'});const t2=new URL(inv2.body.link).searchParams.get('invite')!;void token;
  const acc=await user.call('POST','/public/accept-invite',{token:t2,workspaceId:c.ws,email:'plain@int.test',password:'correct-horse-battery',name:'Plain'});
- if(acc.status===201){user.csrf=acc.body.csrf;assert.equal((await user.call('GET','/integrations')).status,403);assert.equal((await user.call('PUT','/integrations/stripe',{secretKey:'x'})).status,403);}
+ if(acc.status===201){user.csrf=acc.body.csrf;assert.equal((await user.call('GET','/integrations')).status,403);assert.equal((await user.call('PUT','/integrations/polar',{accessToken:'x'})).status,403);}
 });
 
 test('twilio: signature, de-duplication, contact matching, opt-out, send, retry and delivery status',async()=>{
@@ -96,33 +96,45 @@ test('twilio: signature, de-duplication, contact matching, opt-out, send, retry 
  const events=await c.call('GET','/integrations/events');assert.ok(events.body.some((e:any)=>e.status==='rejected'));assert.ok(events.body.some((e:any)=>e.event_type==='message.inbound'&&e.status==='ok'));
 });
 
-test('stripe: checkout, signed webhooks, idempotency, expiry and refunds',async()=>{
+test('polar: checkout, signed webhooks, idempotency, expiry and refunds',async()=>{
  const c=await setup();
  const lead=await c.call('POST','/leads',{name:'Pat Kim',company:'Kim Co',email:'pat@example.com',source:'Manual'});assert.equal(lead.status,201);
  const boot=await c.call('GET','/bootstrap');const contactId=boot.body.data.leads[0].contactId;
  const opp=await c.call('POST','/opportunities',{contactId,pipelineId:boot.body.meta.pipelineId,stageId:boot.body.meta.stageIds.Discovery,name:'Retainer',valueMinor:50000,currency:'USD'});assert.equal(opp.status,201);
- const pay=await c.call('POST',`/opportunities/${opp.body.id}/payments`,{amountMinor:50000,currency:'USD'});assert.equal(pay.status,201);assert.match(pay.body.url,/checkout\.stripe\.test/);
+ assert.equal((await c.call('PUT','/integrations/polar',{productId:'not-a-uuid'})).status,400,'product id must be a UUID');
+ const pay=await c.call('POST',`/opportunities/${opp.body.id}/payments`,{amountMinor:50000,currency:'USD'});assert.equal(pay.status,201);assert.match(pay.body.url,/sandbox\.polar\.test/);
+ const created=JSON.parse([...calls].reverse().find(x=>x.provider==='polar'&&x.method==='POST')!.body);assert.equal(created.products[0],'11111111-1111-4111-8111-111111111111');assert.equal(created.prices['11111111-1111-4111-8111-111111111111'][0].price_amount,50000);assert.equal(created.prices['11111111-1111-4111-8111-111111111111'][0].price_currency,'usd');assert.ok(created.metadata.payment_id);
  const session=(await c.call('GET','/bootstrap')).body.data.payments[0];assert.equal(session.status,'Pending');
- const post=async(event:any,sig?:string)=>{const payload=JSON.stringify(event);const r=await fetch(`${api}/webhooks/stripe/${c.ws}`,{method:'POST',headers:{'Content-Type':'application/json','Stripe-Signature':sig??stripeSig('whsec_test',payload)},body:payload});return r.status;};
- const ref=session.ref;assert.ok(ref.startsWith('cs_test_'));
- const completed={id:'evt_1',type:'checkout.session.completed',data:{object:{id:ref,payment_status:'paid',payment_intent:'pi_1'}}};
- assert.equal(await post(completed,'t=1,v1=bad'),400,'forged signature');
- assert.equal(await post(completed,stripeSig('whsec_test',JSON.stringify(completed),Math.floor(Date.now()/1000)-3600)),400,'stale timestamp');
+ const secret='whsec_'+Buffer.from('polar-test-secret').toString('base64');
+ const post=async(event:any,id:string,headers?:Record<string,string>)=>{const payload=JSON.stringify(event);const r=await fetch(`${api}/webhooks/polar/${c.ws}`,{method:'POST',headers:{'Content-Type':'application/json',...(headers??polarSig(secret,id,payload))},body:payload});return r.status;};
+ const ref=session.ref;assert.ok(ref.startsWith('co_test_'));
+ const paid={type:'order.paid',data:{id:'order_1',checkout_id:ref,status:'paid',total_amount:50000,currency:'usd',metadata:{payment_id:created.metadata.payment_id}}};
+ assert.equal(await post(paid,'msg_1',{'webhook-id':'msg_1','webhook-timestamp':String(Math.floor(Date.now()/1000)),'webhook-signature':'v1,AAAA'}),403,'forged signature');
+ assert.equal(await post(paid,'msg_1',polarSig(secret,'msg_1',JSON.stringify(paid),Math.floor(Date.now()/1000)-3600)),403,'stale timestamp');
+ assert.equal(await post(paid,'msg_1',polarSig('whsec_'+Buffer.from('other').toString('base64'),'msg_1',JSON.stringify(paid))),403,'wrong secret');
  assert.equal((await c.call('GET','/bootstrap')).body.data.payments[0].status,'Pending','nothing changes before verification');
- assert.equal(await post(completed),200);assert.equal(await post(completed),200,'replay is accepted but ignored');
+ assert.equal(await post(paid,'msg_1'),200);assert.equal(await post(paid,'msg_1'),200,'replay is accepted but ignored');
  let p=(await c.call('GET','/bootstrap')).body.data;assert.equal(p.payments.length,1);assert.equal(p.payments[0].status,'Paid');assert.equal(p.payments[0].amount,500);
  const contactPage=await c.call('GET','/contacts/'+contactId);assert.equal(contactPage.body.activities.filter((a:any)=>/Payment received/.test(a.body)).length,1,'recorded once');
- assert.equal(await post({id:'evt_2',type:'charge.refunded',data:{object:{id:'ch_1',payment_intent:'pi_1',amount_refunded:20000}}}),200);
+ assert.equal(await post({type:'refund.created',data:{id:'re_1',status:'pending',amount:20000,order_id:'order_1',currency:'usd'}},'msg_2'),200);
+ assert.equal((await c.call('GET','/bootstrap')).body.data.payments[0].amount,500,'a pending refund changes nothing');
+ assert.equal(await post({type:'refund.updated',data:{id:'re_1',status:'succeeded',amount:20000,order_id:'order_1',currency:'usd'}},'msg_3'),200);
  p=(await c.call('GET','/bootstrap')).body.data;assert.equal(p.payments[0].status,'Paid');assert.equal(p.payments[0].amount,300,'partial refund reduces collected revenue');
- assert.equal(await post({id:'evt_3',type:'charge.refunded',data:{object:{id:'ch_1',payment_intent:'pi_1',amount_refunded:50000}}}),200);
+ assert.equal(await post({type:'refund.updated',data:{id:'re_1',status:'succeeded',amount:20000,order_id:'order_1',currency:'usd'}},'msg_3b'),200);
+ assert.equal((await c.call('GET','/bootstrap')).body.data.payments[0].amount,300,'the same refund is never counted twice');
+ assert.equal(await post({type:'refund.created',data:{id:'re_2',status:'succeeded',amount:30000,order_id:'order_1',currency:'usd'}},'msg_4'),200);
  p=(await c.call('GET','/bootstrap')).body.data;assert.equal(p.payments[0].status,'Refunded');assert.equal(p.payments[0].amount,0);
- // Expired links
+ // Expired and failed links
  const pay2=await c.call('POST',`/opportunities/${opp.body.id}/payments`,{amountMinor:1000,currency:'USD'});assert.equal(pay2.status,201);
  const ref2=(await c.call('GET','/bootstrap')).body.data.payments.find((x:any)=>x.status==='Pending').ref;
- assert.equal(await post({id:'evt_4',type:'checkout.session.expired',data:{object:{id:ref2}}}),200);
+ assert.equal(await post({type:'checkout.updated',data:{id:ref2,status:'expired'}},'msg_5'),200);
  assert.ok((await c.call('GET','/bootstrap')).body.data.payments.some((x:any)=>x.status==='Expired'));
+ const pay3=await c.call('POST',`/opportunities/${opp.body.id}/payments`,{amountMinor:2000,currency:'USD'});assert.equal(pay3.status,201);
+ const ref3=(await c.call('GET','/bootstrap')).body.data.payments.find((x:any)=>x.status==='Pending').ref;
+ assert.equal(await post({type:'checkout.updated',data:{id:ref3,status:'failed'}},'msg_6'),200);
+ assert.ok((await c.call('GET','/bootstrap')).body.data.payments.some((x:any)=>x.status==='Failed'));
  // No card data is stored by the platform.
- assert.ok(!JSON.stringify(calls.filter(x=>x.provider==='stripe')).match(/4242/));
+ assert.ok(!JSON.stringify(calls.filter(x=>x.provider==='polar')).match(/4242/));
 });
 
 test('telegram: escalation alert reaches the new owner with a useful message',async()=>{

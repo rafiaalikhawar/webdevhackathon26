@@ -103,7 +103,7 @@ These are **not** a replacement for HTTP end-to-end tests on PostgreSQL, multipl
 
 ## External integrations
 
-The schema includes Twilio, Stripe, Google Calendar and Telegram integration records, events, messages, payments, refunds, appointments, notification destinations and a transactional outbox. Provider adapters, signature verification, OAuth flows and the outbound outbox consumer are not implemented yet. No provider credentials are needed for this milestone, and none are stored in this repository.
+The schema includes Twilio, Meta WhatsApp, Polar, Google Calendar and Telegram integration records, events, messages, payments, refunds, appointments, notification destinations and a transactional outbox. Provider adapters, signature verification, OAuth flows and the outbound outbox consumer are not implemented yet. No provider credentials are needed for this milestone, and none are stored in this repository.
 
 Provider setup instructions will be finalized when those adapters are implemented and verified against current provider documentation. Never put provider secrets in Vite environment variables or source files.
 

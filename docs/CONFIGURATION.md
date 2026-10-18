@@ -13,14 +13,14 @@ Per-workspace provider credentials are entered on the Integrations page and stor
 | `SECRETS_KEY` | 32-byte hex key that encrypts provider secrets (`openssl rand -hex 32`). Losing it makes stored secrets unreadable |
 | `PUBLIC_BASE_URL` | Public HTTPS base that providers call. Twilio signatures are computed against it |
 | `INTEGRATIONS_SKIP_VERIFY=1` | Dev/test only: skip live credential checks on save. Ignored in production |
-| `TWILIO_API_BASE`, `STRIPE_API_BASE`, `TELEGRAM_API_BASE`, `GOOGLE_TOKEN_URL`, `GOOGLE_CALENDAR_BASE` | Override provider URLs (used by the stub-provider tests) |
+| `TWILIO_API_BASE`, `POLAR_API_BASE`, `TELEGRAM_API_BASE`, `GOOGLE_TOKEN_URL`, `GOOGLE_CALENDAR_BASE` | Override provider URLs (used by the stub-provider tests) |
 
 ## Public HTTPS URL for webhooks
-Twilio, Stripe and Google call you back (the Integrations page shows your exact per-workspace URLs), so they need a public HTTPS address.
+Twilio, Polar, Meta and Google call you back (the Integrations page shows your exact per-workspace URLs), so they need a public HTTPS address.
 Dev: `cloudflared tunnel --url http://localhost:3001` (or `ngrok http 3001`). Use the printed URL as the webhook base.
 
 ## Providers (set up in this order)
-1. **Stripe (test mode)** – dashboard.stripe.com → Developers → API keys (test). Webhook endpoint `https://<public>/api/webhooks/stripe/<workspaceId>`; events: `checkout.session.completed`, `checkout.session.expired`, `payment_intent.payment_failed`, `charge.refunded`. Copy the endpoint's signing secret (`whsec_…`). Test card `4242 4242 4242 4242`.
+1. **Polar (sandbox)** – sandbox.polar.sh → create an organization → Settings → create an access token (scopes: checkouts write, products read, orders read) and any one-time product (copy its ID). Webhook endpoint `https://<public>/api/webhooks/polar/<workspaceId>`; events `order.paid`, `checkout.updated`, `refund.created`, `refund.updated`; copy the endpoint's secret. Relay sets the price per payment request on that product. Sandbox only by default; `POLAR_API_BASE` switches the API host.
 2. **Twilio WhatsApp sandbox** – Console → Messaging → Try it out → WhatsApp. Phones join by sending the join phrase. Set "When a message comes in" to `https://<public>/api/webhooks/twilio/<workspaceId>/inbound` and the status callback to `.../status`. Needs Account SID + Auth Token.
 3. **Google Calendar** – Google Cloud project → enable Calendar API → OAuth consent screen (Testing, add test users) → OAuth client (Web). Redirect URI `https://<public>/api/oauth/google/callback`. Needs Client ID + Secret.
 4. **Telegram (notifications)** – talk to @BotFather → `/newbot` → token. Each employee messages the bot once, then enters their chat id on their profile.

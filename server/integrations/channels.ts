@@ -8,7 +8,7 @@ import {acknowledge,lockRules} from '../lead-service.js';
 import {captureLead,addActivity} from '../intake.js';
 import {credentials,recordEvent,markResult,publicBase,getIntegration} from './registry.js';
 import {verifyTwilio,sendTwilio,stripWhatsapp} from './twilio.js';
-import {verifyStripe,createCheckout} from './stripe.js';
+import {verifyPolar,createCheckout} from './polar.js';
 import {http} from './manage.js';
 import {verifyMeta,safeEqual,sendMeta,toE164,explainMeta} from './whatsapp.js';
 const uuid=z.uuid();
@@ -78,17 +78,17 @@ export class ChannelController{
   await transaction(ctx.workspaceId,async db=>{const m=(await db.query("SELECT m.status,c.owner_id FROM messages m JOIN conversations c ON c.id=m.conversation_id AND c.workspace_id=m.workspace_id WHERE m.id=$1 AND m.workspace_id=$2",[uuid.parse(id),ctx.workspaceId])).rows[0];if(!m)throw nf();requireRecord(ctx,m.owner_id);if(m.status!=='failed')throw new HttpException('Only failed messages can be retried.',409);});
   return deliverMessage(ctx.workspaceId,id);
  }
- // Payment request: creates a Stripe Checkout session for an opportunity.
+ // Payment request: creates a Polar checkout for for an opportunity.
  @Post('opportunities/:id/payments')async pay(@Req()req:Request,@Param('id')oppId:string){
   const ctx=await context(req);requirePermission(ctx,'crm.edit');requirePermission(ctx,'opportunity.value');
   const f=z.object({amountMinor:z.number().int().min(50).max(99999999),currency:z.string().regex(/^[A-Z]{3}$/).default('USD')}).strict().parse(req.body);
   const prep=await transaction(ctx.workspaceId,async db=>{
    const o=(await db.query('SELECT o.*,c.email,c.name AS contact_name FROM opportunities o JOIN contacts c ON c.id=o.contact_id AND c.workspace_id=o.workspace_id WHERE o.id=$1 AND o.workspace_id=$2 AND o.archived_at IS NULL',[uuid.parse(oppId),ctx.workspaceId])).rows[0];if(!o)throw nf();requireRecord(ctx,o.owner_id);
-   const c=await credentials(db,ctx.workspaceId,'stripe');if(!c)throw new HttpException('Payments are not connected. An Admin can connect Stripe on the Integrations page.',409);
+   const c=await credentials(db,ctx.workspaceId,'polar');if(!c)throw new HttpException('Payments are not connected. An Admin can connect Polar on the Integrations page.',409);
    const p=(await db.query("INSERT INTO payments(workspace_id,opportunity_id,requested_by,amount_minor,currency,status) VALUES($1,$2,$3,$4,$5,'pending') RETURNING id",[ctx.workspaceId,o.id,ctx.memberId,f.amountMinor,f.currency])).rows[0];
    return {o,c,paymentId:p.id as string};
   });
-  const r=await createCheckout(http,{secretKey:prep.c.secrets.secretKey,paymentId:prep.paymentId,amountMinor:f.amountMinor,currency:f.currency,name:prep.o.name,successUrl:`${publicBase()}/?payment=success`,cancelUrl:`${publicBase()}/?payment=cancelled`,email:prep.o.email||undefined});
+  const r=await createCheckout(http,{accessToken:prep.c.secrets.accessToken,productId:prep.c.config.productId,paymentId:prep.paymentId,amountMinor:f.amountMinor,currency:f.currency,successUrl:`${publicBase()}/?payment=success`,email:prep.o.email||undefined,name:prep.o.name});
   return transaction(ctx.workspaceId,async db=>{
    if(!r.ok){await db.query("UPDATE payments SET status='failed' WHERE id=$1 AND workspace_id=$2",[prep.paymentId,ctx.workspaceId]);await recordEvent(db,ctx.workspaceId,prep.c.id,{direction:'out',type:'checkout.create',status:'failed',error:r.reason});await markResult(db,prep.c.id,ctx.workspaceId,false,r.reason);throw new HttpException(r.reason,502);}
    await db.query('UPDATE payments SET provider_reference=$3,checkout_url=$4 WHERE id=$1 AND workspace_id=$2',[prep.paymentId,ctx.workspaceId,r.id,r.url]);
@@ -166,14 +166,15 @@ export class WebhookController{
    return {received:true};
   });
  }
- @Post('stripe/:ws')@HttpCode(200)async stripe(@Req()req:Request,@Param('ws')ws:string,@Res({passthrough:true})res:Response){
+ @Post('polar/:ws')@HttpCode(200)async polar(@Req()req:Request,@Param('ws')ws:string,@Res({passthrough:true})res:Response){
   const workspace=uuid.parse(ws),raw:Buffer|undefined=(req as any).rawBody;if(!raw)throw new HttpException('Missing body.',400);
   return transaction(workspace,async db=>{
-   const c=await credentials(db,workspace,'stripe');if(!c)throw nf('Payments are not configured for this workspace.');
-   if(!verifyStripe(c.secrets.webhookSecret,raw,req.header('stripe-signature'))){await recordEvent(db,workspace,c.id,{direction:'in',type:'stripe.webhook',status:'rejected',error:'Signature verification failed.'});res.status(400);return {error:'Invalid signature.'};}
-   const event=JSON.parse(raw.toString());
-   if(!await recordEvent(db,workspace,c.id,{eventId:event.id,direction:'in',type:event.type,summary:{id:event.id,type:event.type}}))return {received:true,duplicate:true};
-   await applyStripeEvent(db,workspace,event);await markResult(db,c.id,workspace,true);
+   const c=await credentials(db,workspace,'polar');if(!c)throw nf('Payments are not configured for this workspace.');
+   const id=req.header('webhook-id');
+   if(!verifyPolar(c.secrets.webhookSecret,raw,{id,timestamp:req.header('webhook-timestamp'),signature:req.header('webhook-signature')})){await recordEvent(db,workspace,c.id,{direction:'in',type:'polar.webhook',status:'rejected',error:'Signature verification failed.'});res.status(403);return {error:'Invalid signature.'};}
+   let event:any;try{event=JSON.parse(raw.toString());}catch{res.status(400);return {error:'Invalid JSON.'};}
+   if(!await recordEvent(db,workspace,c.id,{eventId:id,direction:'in',type:String(event.type||'unknown'),summary:{id,type:event.type}}))return {received:true,duplicate:true};
+   await applyPolarEvent(db,workspace,event);await markResult(db,c.id,workspace,true);
    return {received:true};
   });
  }
@@ -181,13 +182,27 @@ export class WebhookController{
 const toParams=(b:any)=>Object.fromEntries(Object.entries(b||{}).map(([k,v])=>[k,String(v)])) as Record<string,string>;
 const mask4=(s='')=>s.length>4?'…'+s.slice(-4):'…';
 
-/** Applies a verified Stripe event. Safe to call once per event id (the caller de-duplicates). */
-export async function applyStripeEvent(db:DB,ws:string,event:any){
- const o=event.data?.object||{};
- const find=async(by:'session'|'intent'|'meta')=>(await db.query(by==='session'?'SELECT p.*,op.contact_id FROM payments p JOIN opportunities op ON op.id=p.opportunity_id AND op.workspace_id=p.workspace_id WHERE p.workspace_id=$1 AND p.provider_reference=$2 FOR UPDATE OF p':by==='intent'?'SELECT p.*,op.contact_id FROM payments p JOIN opportunities op ON op.id=p.opportunity_id AND op.workspace_id=p.workspace_id WHERE p.workspace_id=$1 AND p.payment_intent_id=$2 FOR UPDATE OF p':'SELECT p.*,op.contact_id FROM payments p JOIN opportunities op ON op.id=p.opportunity_id AND op.workspace_id=p.workspace_id WHERE p.workspace_id=$1 AND p.id::text=$2 FOR UPDATE OF p',[ws,by==='session'?o.id:by==='intent'?(o.payment_intent||o.id):o.metadata?.payment_id])).rows[0];
+/** Applies a verified Polar event. Safe to call once per webhook id (the caller de-duplicates); every write is also idempotent. */
+export async function applyPolarEvent(db:DB,ws:string,event:any){
+ const o=event.data||{};
+ const lock='SELECT p.*,op.contact_id FROM payments p JOIN opportunities op ON op.id=p.opportunity_id AND op.workspace_id=p.workspace_id WHERE p.workspace_id=$1 AND ';
+ const byCheckout=async(id?:string,paymentId?:string)=>(await db.query(lock+'(p.provider_reference=$2 OR p.id::text=$3) FOR UPDATE OF p',[ws,id||'',paymentId||''])).rows[0];
+ const byOrder=async(id?:string)=>(await db.query(lock+'p.payment_intent_id=$2 FOR UPDATE OF p',[ws,id||''])).rows[0];
  const note=(p:any,text:string)=>addActivity(db,ws,p.contact_id,null,'payment',text,p.opportunity_id);
- if(event.type==='checkout.session.completed'&&o.payment_status==='paid'){const p=await find('session');if(p&&p.status==='pending'){await db.query("UPDATE payments SET status='paid',payment_intent_id=$3,confirmed_at=now() WHERE id=$1 AND workspace_id=$2",[p.id,ws,o.payment_intent||null]);await note(p,`Payment received: ${(Number(p.amount_minor)/100).toFixed(2)} ${p.currency}.`);}}
- else if(event.type==='checkout.session.expired'){const p=await find('session');if(p&&p.status==='pending'){await db.query("UPDATE payments SET status='expired' WHERE id=$1 AND workspace_id=$2",[p.id,ws]);await note(p,'Payment link expired without payment.');}}
- else if(event.type==='payment_intent.payment_failed'){const p=await find('meta');if(p&&p.status==='pending'){await db.query("UPDATE payments SET status='failed',payment_intent_id=$3 WHERE id=$1 AND workspace_id=$2",[p.id,ws,o.id]);await note(p,'Payment attempt failed.');}}
- else if(event.type==='charge.refunded'){const p=await find('intent');if(p){const refunded=Number(o.amount_refunded||0),full=refunded>=Number(p.amount_minor);await db.query('INSERT INTO refunds(workspace_id,payment_id,provider_reference,amount_minor,confirmed_at) VALUES($1,$2,$3,$4,now()) ON CONFLICT(workspace_id,provider_reference) DO UPDATE SET amount_minor=EXCLUDED.amount_minor,confirmed_at=now()',[ws,p.id,o.id,refunded]);await db.query('UPDATE payments SET status=$3,charge_id=$4 WHERE id=$1 AND workspace_id=$2',[p.id,ws,full?'refunded':'partially_refunded',o.id]);await note(p,`Refund recorded: ${(refunded/100).toFixed(2)} ${p.currency}.`);}}
+ if(event.type==='order.paid'){
+  const p=await byCheckout(o.checkout_id,o.metadata?.payment_id);
+  if(p&&p.status==='pending'){await db.query("UPDATE payments SET status='paid',payment_intent_id=$3,confirmed_at=now() WHERE id=$1 AND workspace_id=$2",[p.id,ws,o.id||null]);await note(p,`Payment received: ${(Number(p.amount_minor)/100).toFixed(2)} ${p.currency}.`);}
+ }else if(event.type==='checkout.expired'||(event.type==='checkout.updated'&&(o.status==='expired'||o.status==='failed'))){
+  const p=await byCheckout(o.id,o.metadata?.payment_id);const status=o.status==='failed'?'failed':'expired';
+  if(p&&p.status==='pending'){await db.query('UPDATE payments SET status=$3 WHERE id=$1 AND workspace_id=$2',[p.id,ws,status]);await note(p,status==='failed'?'Payment attempt failed.':'Payment link expired without payment.');}
+ }else if((event.type==='refund.created'||event.type==='refund.updated')&&o.status==='succeeded'){
+  const p=await byOrder(o.order_id);
+  if(p){
+   const seen=(await db.query('SELECT 1 FROM refunds WHERE workspace_id=$1 AND provider_reference=$2 AND confirmed_at IS NOT NULL',[ws,o.id])).rows.length>0;
+   await db.query('INSERT INTO refunds(workspace_id,payment_id,provider_reference,amount_minor,confirmed_at) VALUES($1,$2,$3,$4,now()) ON CONFLICT(workspace_id,provider_reference) DO UPDATE SET amount_minor=EXCLUDED.amount_minor,confirmed_at=COALESCE(refunds.confirmed_at,now())',[ws,p.id,o.id,Number(o.amount||0)]);
+   const total=Number((await db.query('SELECT COALESCE(sum(amount_minor),0)::bigint AS t FROM refunds WHERE workspace_id=$1 AND payment_id=$2 AND confirmed_at IS NOT NULL',[ws,p.id])).rows[0].t);
+   await db.query('UPDATE payments SET status=$3 WHERE id=$1 AND workspace_id=$2',[p.id,ws,total>=Number(p.amount_minor)?'refunded':'partially_refunded']);
+   if(!seen)await note(p,`Refund recorded: ${(Number(o.amount||0)/100).toFixed(2)} ${p.currency}.`);
+  }
+ }
 }

@@ -47,7 +47,7 @@ function App({boot,refresh,onLogout}:{boot:Boot;refresh:()=>Promise<void>;onLogo
  useEffect(()=>{document.title=`${page} · Relay`;},[page]);
  useEffect(()=>{const q=new URLSearchParams(location.search);const lead=q.get('lead'),cal=q.get('calendar'),pay=q.get('payment');if(!lead&&!cal&&!pay)return;
   if(cal){setPage('Calendar');notify(cal==='connected'?'Google Calendar connected.':'Google Calendar was not connected. Try again.',cal!=='connected')}
-  if(pay)notify(pay==='success'?'Payment submitted. Relay confirms it once Stripe notifies us.':'Payment cancelled.',pay!=='success');
+  if(pay)notify(pay==='success'?'Payment submitted. Relay confirms it once Polar notifies us.':'Payment cancelled.',pay!=='success');
   if(lead&&data.leads.some(l=>l.id===lead))setDetail(lead);
   if(!lead||data.leads.some(l=>l.id===lead))history.replaceState(null,'','/');},[data.leads.length]);
  useEffect(()=>{if(modal||detail){const previous=document.activeElement as HTMLElement;const panel=document.querySelector<HTMLElement>(modal?'.modal':'.drawer');panel?.focus();const trap=(e:KeyboardEvent)=>{if(e.key!=='Tab'||!panel)return;const list=Array.from(panel.querySelectorAll<HTMLElement>('button:not([disabled]),input,select,textarea,a[href],[tabindex="0"]'));if(!list.length)return;const first=list[0],last=list[list.length-1];if(e.shiftKey&&(document.activeElement===first||document.activeElement===panel)){e.preventDefault();last.focus()}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus()}};document.addEventListener('keydown',trap);return()=>{document.removeEventListener('keydown',trap);previous?.focus()}}},[modal?.kind,detail]);
