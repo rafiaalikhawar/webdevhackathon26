@@ -10,6 +10,7 @@ const meta:Record<string,{name:string;letter:string;color:string;category:string
  google:{name:'Google Calendar',letter:'31',color:'google',category:'Scheduling',text:'Each employee connects their own calendar to book appointments.',labels:{clientId:'OAuth client ID',clientSecret:'OAuth client secret'},help:'Google Cloud → Enable Calendar API → OAuth consent (add test users) → Web client. Add the redirect URI below. Employees then connect from the Calendar page.'},
  telegram:{name:'Telegram',letter:'↗',color:'telegram',category:'Escalation alerts',text:'Alert the new owner outside Relay when a lead escalates.',labels:{botToken:'Bot token'},help:'Create a bot with @BotFather and paste its token. Each employee then adds their own chat id on this page.'}
 };
+const OPTIONAL=new Set(['businessAccountId']);
 const tone=(s:string)=>s==='connected'?'green':s==='error'||s==='needs_reconnect'?'red':'neutral';
 const label=(s:string)=>s==='connected'?'Connected':s==='error'?'Error':s==='needs_reconnect'?'Needs reconnection':'Not connected';
 const when=(d:string|null)=>d?new Date(d).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'Never';
@@ -40,7 +41,7 @@ export function IntegrationsPage({canManage,destination,notify,onChanged}:{canMa
   {edit&&<div className="modal-overlay" onClick={()=>setEdit(null)}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="int-title" onClick={e=>e.stopPropagation()}>
    <div className="modal-heading"><h2 id="int-title">{meta[edit.provider].name}</h2><button className="icon-btn" aria-label="Close dialog" onClick={()=>setEdit(null)}><X size={16}/></button></div>
    <form onSubmit={save}><p className="modal-description">{meta[edit.provider].help}</p>
-    {[...edit.fields.secrets,...edit.fields.config].map(k=>{const isSecret=edit.fields.secrets.includes(k);return <label key={k}>{meta[edit.provider].labels[k]||k}<input name={k} type={isSecret?'password':'text'} autoComplete="off" placeholder={isSecret?(edit.secrets[k]||'Not set'):''} defaultValue={isSecret?'':edit.config[k]||''} required={!isSecret&&!edit.config[k]||isSecret&&!edit.secrets[k]}/></label>})}
+    {[...edit.fields.secrets,...edit.fields.config].map(k=>{const isSecret=edit.fields.secrets.includes(k);return <label key={k}>{meta[edit.provider].labels[k]||k}<input name={k} type={isSecret?'password':'text'} autoComplete="off" placeholder={isSecret?(edit.secrets[k]||'Not set'):''} defaultValue={isSecret?'':edit.config[k]||''} required={!OPTIONAL.has(k)&&(!isSecret&&!edit.config[k]||isSecret&&!edit.secrets[k])}/></label>})}
     {Object.keys(edit.webhooks).length>0&&<div className="notice compact"><div><strong>Paste into {meta[edit.provider].name}</strong>{Object.entries(edit.webhooks).map(([k,v])=><p key={k} style={{wordBreak:'break-all'}}><b>{k}:</b> {v}</p>)}<p className="field-help">These need a public HTTPS address. Set PUBLIC_BASE_URL to your tunnel or deployment.</p></div></div>}
     {edit.status!=='not_connected'&&<p className="field-help">Leave a secret blank to keep the stored one.</p>}
     {error&&<div className="form-error" role="alert"><TriangleAlert size={15}/>{error}</div>}
