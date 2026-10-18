@@ -1,0 +1,87 @@
+/* Keep both lines centered when the second line reaches its width limit. */
+.services-heading-copy,
+.services-heading-area h2,
+.services-heading-area h2 > span {
+  margin-inline: auto;
+}
+
+.services-heading-copy {
+  min-width: 0;
+}
+
+/* Use the existing compact navigation before tablet links become crowded. */
+@media (max-width: 960px) {
+  .desktop-nav,
+  .header-sign-in {
+    display: none;
+  }
+
+  .menu-toggle {
+    display: grid;
+    place-items: center;
+  }
+
+  .menu-toggle svg {
+    width: 20px;
+  }
+
+  .header-actions {
+    gap: 15px;
+  }
+
+  .mobile-nav {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: -1px;
+    right: -1px;
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100svh - 110px);
+    overflow-y: auto;
+    padding: 13px 19px 20px;
+    background: #121418;
+    border: 1px solid #ffffff16;
+    box-shadow: 0 15px 35px #0005;
+  }
+
+  .mobile-nav > a,
+  .mobile-nav > button {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    padding: 17px 0;
+    border-bottom: 1px solid #ffffff12;
+    background: transparent;
+    color: #d3d8df;
+    font-size: 16px;
+    text-align: left;
+  }
+
+  .mobile-nav > button {
+    margin-top: 18px;
+    padding: 15px;
+    background: #e6e8ec;
+    color: #181b20;
+    font-size: 13px;
+  }
+}
+
+/* Let the original pill buttons share the available width on narrow phones. */
+@media (max-width: 480px) {
+  .hero .hero-buttons {
+    width: min(100%, 288px);
+    gap: clamp(12px, 6vw, 24px);
+  }
+
+  .hero-buttons .magnetic-zone {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .hero-buttons .magnetic-button.button {
+    width: 100%;
+    min-width: 0;
+    padding-inline: 20px;
+  }
+}

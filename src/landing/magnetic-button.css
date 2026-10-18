@@ -1,0 +1,10 @@
+.magnetic-zone{position:relative;display:inline-flex;flex-shrink:0;isolation:isolate}
+.magnetic-zone:before{content:'';position:absolute;inset:-12px;z-index:0}
+.magnetic-button.button,.magnetic-button.nav-cta{position:relative;z-index:1;background:#fff;color:#111215;border:0;border-radius:999px;justify-content:center;gap:0;transition:background .2s,color .2s,box-shadow .2s;will-change:transform}
+.magnetic-button.button{min-width:152px;padding:0 28px}
+.magnetic-button.nav-cta{min-width:110px;padding:12px 20px}
+.magnetic-button.button:hover,.magnetic-button.nav-cta:hover{background:#fff;color:#111215;box-shadow:0 4px 24px #ffffff14;transform:none}
+.magnetic-label{position:relative;display:block;pointer-events:none;will-change:transform}
+.hero .hero-buttons{gap:32px}
+@media(max-width:760px){.magnetic-button.button{min-width:132px;padding:0 24px}.magnetic-button.nav-cta{min-width:101px;padding:10px 16px}.hero .hero-buttons{gap:24px}.magnetic-zone:before{inset:-8px}}
+@media(hover:none),(pointer:coarse),(prefers-reduced-motion:reduce){.magnetic-zone:before{display:none}.magnetic-button,.magnetic-label{will-change:auto}}

@@ -1,0 +1,37 @@
+.business-flow{padding:40px 5.2% 90px;background:#080b10;color:#f4f5f7}
+.flow-section-top{display:flex;justify-content:space-between;gap:25px;padding:24px 0;border-top:1px solid #ffffff20;border-bottom:1px solid #ffffff12;color:#8796ab}
+.flow-section-top .mono{font-size:8px;letter-spacing:1.4px}
+.flow-layout{display:grid;grid-template-columns:1fr 1fr;gap:8%;position:relative}
+.flow-visual{position:sticky;top:155px;align-self:start;padding-top:75px}
+.flow-visual h3{font-size:clamp(34px,3.7vw,59px);font-weight:450;letter-spacing:-2.3px;line-height:1.1}
+.flow-visual h3>span{color:#8e9daf}
+.flow-map{position:relative;width:100%;max-width:560px;aspect-ratio:520/360;margin:30px 0 20px}
+.flow-map>svg{width:100%;height:100%;overflow:visible}
+.map-base{stroke:#26364e;stroke-width:1}
+.map-route{stroke:#447cc4;stroke-width:1.5;opacity:0;transition:opacity .6s;stroke-dasharray:8 4}
+.map-route.is-active{opacity:1;animation:route-travel 3s linear infinite}
+.flow-map-center{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:20px 25px;background:#080b10;font-size:37px;letter-spacing:-2px;line-height:1;text-align:center}
+.flow-map-center .mono{display:block;font-size:6px;color:#7c90ab;letter-spacing:1px;margin-top:12px}
+.flow-node{position:absolute;display:flex;flex-direction:column;align-items:center;gap:14px;color:#64758e;transform:translate(-50%,-50%);transition:color .5s}
+.flow-node .mono{font-size:7px;letter-spacing:1px;background:#080b10;padding:3px 6px}
+.flow-node>svg{box-sizing:content-box;background:#080b10;padding:13px;outline:1px solid #ffffff12;transition:background .5s,outline-color .5s,box-shadow .5s}
+.flow-node.is-active{color:#c8d9ee}
+.flow-node.is-active>svg{background:#112748;outline-color:#40669b;box-shadow:0 0 35px #285c9a24}
+.flow-node-0{left:15.4%;top:20.5%}.flow-node-1{left:84.6%;top:20.5%}.flow-node-2{left:15.4%;top:79.4%}.flow-node-3{left:84.6%;top:79.4%}
+.flow-caption{display:flex;align-items:center;gap:12px;color:#7a8ba3}
+.flow-caption .mono{font-size:7px;letter-spacing:1.2px}
+.flow-signal{width:5px;height:5px;background:#507caf}
+.flow-steps{position:relative;padding:45px 0 45px 40px;margin-top:50px}
+.flow-line{position:absolute;left:0;top:95px;bottom:95px;width:1px;background:#ffffff13}
+.flow-line-progress{width:100%;height:100%;background:#4e75a5;transform-origin:top}
+.flow-step{position:relative;min-height:31vh;display:flex;flex-direction:column;justify-content:center;padding:34px 0}
+.flow-step-marker{position:absolute;left:-43px;top:50%;width:7px;height:7px;background:#293b53;transition:background .4s,box-shadow .4s}
+.flow-step.is-active .flow-step-marker{background:#6c9bd6;box-shadow:0 0 15px #4275ac66}
+.flow-step-number{font-size:9px;color:#677b97;margin-bottom:22px}
+.flow-step h4{margin:0;font-size:clamp(29px,3.1vw,46px);font-weight:450;letter-spacing:-1.8px;line-height:1.15;color:#a5afbe;transition:color .5s}
+.flow-step.is-active h4{color:#f2f4f8}
+.flow-step p{max-width:310px;margin-top:19px;font-size:13px;line-height:1.8;color:#8a99ae}
+@keyframes route-travel{to{stroke-dashoffset:-48}}
+@media(max-width:900px){.flow-layout{gap:5%}.flow-visual{top:135px}.flow-visual h3{font-size:37px}.flow-step h4{font-size:34px}.flow-map-center{font-size:28px;padding:16px}.flow-node .mono{font-size:6px}}
+@media(max-width:760px){.business-flow{padding:20px 6% 55px}.flow-section-top .mono{font-size:7px;letter-spacing:.8px}.flow-section-top>span:last-child{display:none}.flow-layout{display:block}.flow-visual{position:relative;top:auto;padding-top:45px}.flow-visual h3{font-size:clamp(35px,8vw,48px);letter-spacing:-1.7px}.flow-map{max-width:440px;margin:35px auto 15px}.flow-caption{justify-content:center}.flow-steps{padding:10px 0 10px 30px;margin-top:35px}.flow-line{top:65px;bottom:65px}.flow-step{min-height:190px;padding:30px 0}.flow-step-marker{left:-33px}.flow-step-number{margin-bottom:15px}.flow-step h4{font-size:30px;letter-spacing:-1.2px}.flow-step p{font-size:12px;margin-top:14px;max-width:290px}.flow-node>svg{padding:10px;width:18px;height:18px}.flow-node .mono{letter-spacing:.5px}.flow-map-center{font-size:29px}}
+@media(prefers-reduced-motion:reduce){.map-route.is-active{animation:none}.flow-step h4{color:#f2f4f8}.flow-line-progress{transform:none}.flow-step-marker{background:#6c9bd6}.flow-step-copy{opacity:1!important;transform:none!important}.flow-node,.flow-node>svg,.flow-step h4,.map-route{transition:none}}

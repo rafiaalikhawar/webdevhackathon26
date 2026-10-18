@@ -1,0 +1,22 @@
+.plain-service-list{position:relative;list-style:none;padding:0;margin:0}
+.plain-service-row{position:relative;isolation:isolate;display:flex;align-items:flex-start;gap:23px;padding:26px 24px;margin:6px 0;background:transparent;border:0;box-shadow:none;border-radius:0;transition:box-shadow .3s}
+.plain-service-row:before{content:'';position:absolute;inset:0;z-index:-1;background:linear-gradient(105deg,#092751 0%,#154d96 60%,#0c3067 100%);opacity:0;transition:opacity .3s}
+.plain-service-row:hover:before,.plain-service-row:focus-visible:before{opacity:1}
+.plain-service-row:hover,.plain-service-row:focus-visible{box-shadow:0 0 32px #1b6ce52b,inset 0 0 28px #2677e51a}
+.plain-service-number{flex-shrink:0;min-width:22px;padding-top:11px;color:#6f7f95;font-size:9px;letter-spacing:1px;transition:color .25s}
+.plain-service-icon{flex-shrink:0;margin-top:8px;color:#91a1b7;transition:color .25s}
+.plain-service-copy{min-width:0}
+.plain-service-copy{display:grid;grid-template-columns:1.2fr 1fr;gap:7% 30px;align-items:center;width:100%}
+.plain-service-copy p{max-width:350px}
+.plain-service-copy h3{font-size:clamp(23px,2.4vw,35px);line-height:1.3;font-weight:450;letter-spacing:-1px;color:#e0e4ea;transition:color .25s}
+.plain-service-copy p{font-size:12px;line-height:1.8;color:#94a0b2;margin-top:9px;transition:color .25s}
+.plain-service-row:hover h3,.plain-service-row:focus-visible h3{color:#fff}
+.plain-service-row:hover .plain-service-icon,.plain-service-row:focus-visible .plain-service-icon{color:#badbff}
+.plain-service-row:hover .plain-service-number,.plain-service-row:focus-visible .plain-service-number{color:#91c0ff}
+.plain-service-row:hover p,.plain-service-row:focus-visible p{color:#c6dcfa}
+.plain-service-row:focus-visible{outline:none}
+.plain-service-row:focus-visible h3{text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:7px}
+@media(max-width:760px){.plain-service-row{gap:13px;padding:22px 14px}.plain-service-number{min-width:16px;padding-top:7px;font-size:7px}.plain-service-icon{width:18px;height:18px;margin-top:4px}.plain-service-copy h3{font-size:23px;letter-spacing:-.6px;line-height:1.25}.plain-service-copy p{font-size:11px;margin-top:9px;line-height:1.9}}
+@media(max-width:370px){.plain-service-row{gap:10px}.plain-service-copy h3{font-size:21px}.plain-service-copy p{font-size:10px}.plain-service-icon{width:16px;height:16px}}
+@media(max-width:900px){.plain-service-copy{display:block}}
+@media(prefers-reduced-motion:reduce){.plain-service-row,.plain-service-row:before,.plain-service-row *{transition:none}}

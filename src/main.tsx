@@ -190,7 +190,7 @@ function Root(){
  useEffect(()=>{onSessionExpired(()=>{if(!had.current)return;setBoot(null);setNotice('Your session expired. Please sign in again.');setState('auth')});load()},[]);
  useEffect(()=>{if(!boot)return;const ws=localStorage.getItem('relay-workspace')||'';let es:EventSource|null=null;try{es=new EventSource(`/api/events?ws=${ws}`);es.addEventListener('change',()=>load())}catch{/* fall back to polling */}const t=setInterval(()=>{if(!document.hidden)load()},30000);return()=>{es?.close();clearInterval(t)}},[!!boot]);
  if(boot)return <App boot={boot} refresh={load} onLogout={()=>{setWorkspaceId('');setBoot(null);setNotice('');setState('auth')}}/>;
- if(state==='auth')return <AuthScreen notice={notice} onDone={()=>{setNotice('');setState('loading');load()}}/>;
+ if(state==='auth')return <AuthScreen initialMode={new URLSearchParams(location.search).get('auth')==='signup'?'signup':'login'} notice={notice} onDone={()=>{setNotice('');setState('loading');load()}}/>;
  if(state==='error')return <div className="loading-screen" role="alert"><div><p>We could not reach the RESX server.</p><button className="btn" onClick={()=>{setState('loading');load()}}>Try again</button></div></div>;
  return <div className="loading-screen" role="status">Loading your workspace…</div>;
 }

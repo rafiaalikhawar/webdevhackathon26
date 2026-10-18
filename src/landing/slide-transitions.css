@@ -1,0 +1,6 @@
+main{position:relative;isolation:isolate}
+main>.hero{z-index:0}
+main>.services-story{z-index:1}
+/* The incoming slide remains opaque as the previous slide scales behind it. */
+.services-story{box-shadow:0 -25px 70px #0004}
+@media(prefers-reduced-motion:reduce){.hero{transform:none!important;opacity:1!important}.services-story{box-shadow:none}}

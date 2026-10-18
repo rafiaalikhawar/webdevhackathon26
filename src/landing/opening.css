@@ -1,0 +1,17 @@
+/* The opening is deliberately empty black until the loading streak begins. */
+.intro{background:#000}
+.intro-center{visibility:hidden}
+.intro-letter{color:#79b4ff;background:linear-gradient(180deg,#e4f2ff 0%,#8bc4ff 30%,#428be5 62%,#1b498a 100%);background-clip:text;-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.intro-glow{background:radial-gradient(ellipse,#16458135,transparent 65%)}
+.intro-glow,.intro-bottom{opacity:0}
+.opening-loader{position:absolute;inset:0;background:#000;pointer-events:none}
+.opening-progress{position:absolute;left:6.25%;right:8%;top:50%;height:64px;transform:translateY(-50%)}
+.opening-marker{position:absolute;left:0;top:0;display:flex;align-items:center;gap:9px;will-change:left;white-space:nowrap}
+.opening-square{width:11px;height:11px;background:#2d88ff}
+.opening-percentage{font-family:var(--mono);font-size:12px;line-height:14px;color:#ecf3ff;letter-spacing:-.5px;font-weight:500;min-width:36px}
+.opening-guide{position:absolute;left:0;top:17px;height:39px;border-left:1px dashed #7f94ad8c}
+.opening-trail{position:absolute;left:0;top:55px;width:0;height:14px;overflow:hidden;will-change:width}
+.opening-trail:after{content:'';position:absolute;right:0;top:0;width:clamp(140px,24vw,360px);height:100%;background:linear-gradient(90deg,transparent 0%,#00306a55 10%,#0069dba6 28%,#2d8df6 49%,#8bc8ff 75%,#e5f4ff 100%);mask-image:linear-gradient(90deg,transparent,#000 35%);box-shadow:inset -3px 0 8px #fff4}
+.opening-trail:before{content:'';position:absolute;right:0;top:0;width:clamp(100px,17vw,250px);height:100%;z-index:1;opacity:.35;background:repeating-linear-gradient(90deg,transparent 0 5px,#c6e5ff6b 7px,transparent 10px 17px);mask-image:linear-gradient(90deg,transparent,#000 55%,transparent)}
+.intro .skip-intro:focus-visible{outline:1px solid #5684b555;outline-offset:3px}
+@media(max-width:760px){.opening-progress{left:7%;right:15%;height:53px}.opening-marker{gap:6px}.opening-square{width:8px;height:8px}.opening-percentage{font-size:10px;line-height:12px}.opening-guide{top:14px;height:31px}.opening-trail{top:44px;height:10px}}

@@ -1,0 +1,19 @@
+.contact-section{position:relative;z-index:2;min-height:720px;min-height:85svh;padding:58px 5.2% 80px;background:#080c14;border-top:1px solid #ffffff10;display:flex;flex-direction:column;justify-content:space-between}
+.contact-top{display:flex;align-items:center;justify-content:space-between;gap:20px;color:#7f91ab}
+.contact-top>.mono{font-size:8px;letter-spacing:1.2px}
+.contact-introduction{margin:70px 0 60px}
+.contact-introduction h2{font-size:clamp(52px,6.7vw,102px);line-height:1.03;font-weight:450;letter-spacing:-4.5px;color:#f5f7fb}
+.contact-introduction h2>span{color:#9baabd}
+.contact-introduction p{font-size:13px;line-height:1.8;color:#a3afc1;margin-top:28px}
+.contact-methods{border-top:1px solid #ffffff21}
+.contact-method{display:flex;align-items:center;justify-content:space-between;gap:25px;min-height:100px;padding:23px 6px;border-bottom:1px solid #ffffff17;color:#e1e7f0;transition:background .25s,color .25s}
+.contact-method-label{display:flex;align-items:center;gap:19px;font-size:29px;font-weight:400;letter-spacing:-1px}
+.contact-method-label svg{color:#7f9abd}
+.contact-method-value{display:flex;align-items:center;gap:40px;font-size:18px;color:#c8d5e7;overflow-wrap:anywhere}
+.contact-pending{font-family:var(--mono);font-size:11px;letter-spacing:.5px;color:#8192ac}
+a.contact-method:hover,a.contact-method:focus-visible{background:#11294d;color:#fff}
+a.contact-method:hover .contact-method-value{color:#fff}
+@media(min-width:1600px){.contact-section{padding-left:max(5.2%,calc((100% - 1500px)/2));padding-right:max(5.2%,calc((100% - 1500px)/2))}}
+@media(max-width:760px){.contact-section{min-height:680px;padding:40px 6% 48px}.contact-top>.mono{font-size:7px}.contact-top>.mono:last-child{display:none}.contact-introduction{margin:65px 0 50px}.contact-introduction h2{font-size:clamp(43px,10.5vw,68px);letter-spacing:-2.2px;line-height:1.08}.contact-introduction p{font-size:11px;max-width:270px;margin-top:24px}.contact-method{min-height:93px;gap:16px;padding:20px 0}.contact-method-label{font-size:24px;letter-spacing:-.7px;gap:12px}.contact-method-label svg{width:20px}.contact-method-value{font-size:12px;gap:12px;max-width:50%}.contact-method-value svg{width:16px}.contact-pending{font-size:9px}}
+@media(max-width:370px){.contact-introduction h2{font-size:40px}.contact-method-label{font-size:22px}.contact-pending{font-size:8px}}
+@media(prefers-reduced-motion:reduce){.contact-method{transition:none}}
