@@ -13,7 +13,7 @@ Per-workspace provider credentials are entered on the Integrations page and stor
 | `SECRETS_KEY` | 32-byte hex key that encrypts provider secrets (`openssl rand -hex 32`). Losing it makes stored secrets unreadable |
 | `PUBLIC_BASE_URL` | Public HTTPS base that providers call |
 | `INTEGRATIONS_SKIP_VERIFY=1` | Dev/test only: skip live credential checks on save. Ignored in production |
-| `POLAR_API_BASE`, `TELEGRAM_API_BASE`, `GOOGLE_TOKEN_URL`, `GOOGLE_CALENDAR_BASE` | Override provider URLs (used by the stub-provider tests) |
+| `POLAR_API_BASE`, `RESEND_API_BASE`, `GOOGLE_TOKEN_URL`, `GOOGLE_CALENDAR_BASE` | Override provider URLs (used by the stub-provider tests) |
 
 ## Public HTTPS URL for webhooks
 Meta, Polar and Google call you back (the Integrations page shows your exact per-workspace URLs), so they need a public HTTPS address.
@@ -22,7 +22,7 @@ Dev: `cloudflared tunnel --url http://localhost:3001` (or `ngrok http 3001`). Us
 ## Providers (set up in this order)
 1. **Polar (sandbox)** – sandbox.polar.sh → create an organization → Settings → create an access token (scopes: checkouts write, products read, orders read) and any one-time product (copy its ID). Webhook endpoint `https://<public>/api/webhooks/polar/<workspaceId>`; events `order.paid`, `checkout.updated`, `refund.created`, `refund.updated`; copy the endpoint's secret. Relay sets the price per payment request on that product. Sandbox only by default; `POLAR_API_BASE` switches the API host.
 2. **Google Calendar** – Google Cloud project → enable Calendar API → OAuth consent screen (Testing, add test users) → OAuth client (Web). Redirect URI `https://<public>/api/oauth/google/callback`. Needs Client ID + Secret.
-3. **Telegram (notifications)** – talk to @BotFather → `/newbot` → token. Each employee messages the bot once, then enters their chat id on their profile.
+3. **Email alerts (Resend)** – resend.com → API Keys → create a key (sending access is enough). Enter it on the Integrations page, with an optional sender such as `Relay <alerts@yourdomain.com>`. Until you verify a domain, Resend sends only from `onboarding@resend.dev` and only to your own Resend account email. Each employee can set their alert address on the Integrations page; it defaults to their login email.
 
 ## WhatsApp via Meta Cloud API
 Per-workspace, entered on the Integrations page (encrypted at rest): access token, app secret, a verify token you invent, Phone number ID (and optionally the WhatsApp Business Account ID).

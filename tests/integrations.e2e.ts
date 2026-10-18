@@ -9,16 +9,16 @@ import 'dotenv/config';
 
 const API_PORT=3002,STUB_PORT=4010,api=`http://localhost:${API_PORT}/api`,origin='http://localhost:5173',base=`http://localhost:${API_PORT}`;
 const calls:{provider:string;method:string;path:string;body:string}[]=[];
-const mode={meta:'ok',telegram:'ok',google:'ok',busy:[] as {start:string;end:string}[]};
+const mode={meta:'ok',resend:'ok',google:'ok',busy:[] as {start:string;end:string}[]};
 let sid=0,lastMetaId='';
 
 const stub=http.createServer((req,res)=>{let body='';req.on('data',c=>body+=c);req.on('end',()=>{
- const url=req.url||'',provider=url.startsWith('/graph')?'graph':url.startsWith('/polar')?'polar':url.startsWith('/telegram')?'telegram':url.startsWith('/gtoken')?'gtoken':'gcal';
+ const url=req.url||'',provider=url.startsWith('/graph')?'graph':url.startsWith('/polar')?'polar':url.startsWith('/resend')?'resend':url.startsWith('/gtoken')?'gtoken':'gcal';
  calls.push({provider,method:req.method||'',path:url,body});
  const json=(s:number,o:unknown)=>{res.writeHead(s,{'Content-Type':'application/json'});res.end(s===204?'':JSON.stringify(o));};
  if(provider==='graph'){if(req.method==='GET')return json(200,{display_phone_number:'+1 555 000'});if(mode.meta==='expired')return json(401,{error:{code:190,message:'Session has expired'}});if(mode.meta==='window')return json(400,{error:{code:131047,message:'Re-engagement message'}});lastMetaId='wamid.OUT'+(++sid);return json(200,{messages:[{id:lastMetaId}]});}
  if(provider==='polar'){if(req.method==='GET')return json(200,{id:'prod'});return json(201,{id:'co_test_'+(++sid),url:'https://sandbox.polar.test/checkout/'+sid,status:'open'});}
- if(provider==='telegram'){if(url.includes('getMe'))return json(200,{ok:true});if(mode.telegram==='unauthorized')return json(401,{ok:false,description:'Unauthorized'});return json(200,{ok:true});}
+ if(provider==='resend'){if(req.method==='GET')return json(401,{name:'restricted_api_key',message:'This API key is restricted to only send emails'});if(mode.resend==='unauthorized')return json(401,{name:'validation_error',message:'API key is invalid'});if(mode.resend==='down')return json(503,{message:'down'});return json(200,{id:'em_'+(++sid)});}
  if(provider==='gtoken'){const p=new URLSearchParams(body);if(p.get('grant_type')==='refresh_token'&&mode.google==='revoked')return json(400,{error:'invalid_grant'});return json(200,{access_token:'at-'+(++sid),refresh_token:p.get('grant_type')==='authorization_code'?'rt-1':undefined,expires_in:1});}
  if(url.includes('/freeBusy'))return json(200,{calendars:{primary:{busy:mode.busy}}});
  if(req.method==='DELETE')return json(204,{});
@@ -27,7 +27,7 @@ const stub=http.createServer((req,res)=>{let body='';req.on('data',c=>body+=c);r
 
 let children:ChildProcess[]=[];
 const env={...process.env,PORT:String(API_PORT),NODE_ENV:'development',PUBLIC_BASE_URL:base,INTEGRATIONS_SKIP_VERIFY:'1',
- POLAR_API_BASE:`http://localhost:${STUB_PORT}/polar`,TELEGRAM_API_BASE:`http://localhost:${STUB_PORT}/telegram`,META_GRAPH_BASE:`http://localhost:${STUB_PORT}/graph`,GOOGLE_TOKEN_URL:`http://localhost:${STUB_PORT}/gtoken`,GOOGLE_CALENDAR_BASE:`http://localhost:${STUB_PORT}/gcal`};
+ POLAR_API_BASE:`http://localhost:${STUB_PORT}/polar`,RESEND_API_BASE:`http://localhost:${STUB_PORT}/resend`,META_GRAPH_BASE:`http://localhost:${STUB_PORT}/graph`,GOOGLE_TOKEN_URL:`http://localhost:${STUB_PORT}/gtoken`,GOOGLE_CALENDAR_BASE:`http://localhost:${STUB_PORT}/gcal`};
 before(async()=>{
  await new Promise<void>(r=>stub.listen(STUB_PORT,r));
  for(const script of ['server/main.ts','server/worker.ts'])children.push(spawn('node',['--import','tsx',script],{env:{...env,APP_ORIGIN:origin},stdio:['ignore','inherit','inherit']}));
@@ -46,13 +46,13 @@ const polarSig=(secret:string,id:string,payload:string,t=Math.floor(Date.now()/1
 
 async function setup(){
  const c=new Client();await c.signup();
- for(const [p,body] of Object.entries({polar:{accessToken:'polar_oat_abc123',webhookSecret:'whsec_'+Buffer.from('polar-test-secret').toString('base64'),productId:'11111111-1111-4111-8111-111111111111'},telegram:{botToken:'123:ABCDEF'},google:{clientId:'cid',clientSecret:'csecret'}}))assert.equal((await c.call('PUT','/integrations/'+p,body)).status,200,p);
+ for(const [p,body] of Object.entries({polar:{accessToken:'polar_oat_abc123',webhookSecret:'whsec_'+Buffer.from('polar-test-secret').toString('base64'),productId:'11111111-1111-4111-8111-111111111111'},resend:{apiKey:'re_test_123456'},google:{clientId:'cid',clientSecret:'csecret'}}))assert.equal((await c.call('PUT','/integrations/'+p,body)).status,200,p);
  return c;
 }
 
 test('secrets are encrypted at rest and masked in the API',async()=>{
  const c=await setup();const list=await c.call('GET','/integrations');assert.equal(list.status,200);
- const text=JSON.stringify(list.body);assert.ok(!text.includes('polar_oat_abc123')&&!text.includes('polar-test-secret')&&!text.includes('123:ABCDEF'),'plaintext secret leaked');
+ const text=JSON.stringify(list.body);assert.ok(!text.includes('polar_oat_abc123')&&!text.includes('polar-test-secret')&&!text.includes('re_test_123456'),'plaintext secret leaked');
  const polar=list.body.find((p:any)=>p.provider==='polar');assert.equal(polar.status,'connected');assert.ok(polar.secrets.accessToken.startsWith('••••'));assert.ok(polar.limits.length>10);assert.ok(!list.body.some((p:any)=>p.provider==='stripe'),'stripe is no longer offered');
  const user=new Client();Object.assign(user,{ws:c.ws});// a plain user cannot read or change integrations
  const inv=await c.call('POST','/invitations',{email:`u-${crypto.randomUUID().slice(0,6)}@int.test`,baseLevel:'User'});const token=new URL(inv.body.link).searchParams.get('invite')!;
@@ -103,17 +103,32 @@ test('polar: checkout, signed webhooks, idempotency, expiry and refunds',async()
  assert.ok(!JSON.stringify(calls.filter(x=>x.provider==='polar')).match(/4242/));
 });
 
-test('telegram: escalation alert reaches the new owner with a useful message',async()=>{
- const c=await setup();
- assert.equal((await c.call('PUT','/me/destination',{address:'555123'})).status,200);
+const sentEmails=(since=0)=>calls.filter(x=>x.provider==='resend'&&x.method==='POST').slice(since);
+async function escalate(c:Client,name:string){
  const boot=await c.call('GET','/bootstrap');
  assert.equal((await c.call('PUT','/assignment-rules',{version:boot.body.meta.rulesVersion,ackSeconds:10,idleSeconds:3600,maxEscalations:3})).status,200);
- const before=calls.filter(x=>x.provider==='telegram'&&x.path.includes('sendMessage')).length;
- assert.equal((await c.call('POST','/leads',{name:'Escalate Me',company:'Slow Co',source:'Website'})).status,201);
- let sent:typeof calls=[];for(let i=0;i<40&&!sent.length;i++){await new Promise(r=>setTimeout(r,1000));sent=calls.filter(x=>x.provider==='telegram'&&x.path.includes('sendMessage')).slice(before);}
+ const before=sentEmails().length;
+ assert.equal((await c.call('POST','/leads',{name,company:'Slow Co',source:'Website'})).status,201);
+ let sent:typeof calls=[];for(let i=0;i<40&&!sent.length;i++){await new Promise(r=>setTimeout(r,1000));sent=sentEmails(before).filter(x=>JSON.parse(x.body).subject.includes(name));}
+ return sent;
+}
+test('email alerts: escalation reaches the chosen address with a useful message',async()=>{
+ const c=await setup();
+ assert.equal((await c.call('PUT','/me/destination',{address:'not an email'})).status,400);
+ assert.equal((await c.call('PUT','/me/destination',{address:'alerts@example.com'})).status,200);
+ const sent=await escalate(c,'Escalate Me');
  assert.ok(sent.length>=1,'alert was delivered within the window');
- const text=JSON.parse(sent[0].body).text as string;assert.match(text,/Escalate Me/);assert.match(text,/Source: Website/);assert.match(text,/Reason:/);assert.match(text,/\/\?lead=/);
- assert.equal(JSON.parse(sent[0].body).chat_id,'555123');
+ const mail=JSON.parse(sent[0].body);assert.deepEqual(mail.to,['alerts@example.com']);assert.match(mail.subject,/Escalate Me/);assert.match(mail.text,/Source: Website/);assert.match(mail.text,/Reason:/);assert.match(mail.text,/\/\?lead=/);assert.match(mail.html,/Open the lead/);assert.match(mail.from,/onboarding@resend\.dev/);
+ const events=await c.call('GET','/integrations/events');assert.ok(events.body.some((e:any)=>e.event_type==='alert.email'&&e.status==='ok'));assert.ok(!JSON.stringify(events.body).includes('re_test_123456'));
+});
+
+test('email alerts: default to the login email, and a rejected key is reported',async()=>{
+ const c=new Client();const me=await c.signup();assert.equal((await c.call('PUT','/integrations/resend',{apiKey:'re_test_123456',fromAddress:'Relay <alerts@example.com>'})).status,200);
+ assert.equal((await c.call('PUT','/integrations/resend',{apiKey:'re_x',fromAddress:'bad sender'})).status,400,'sender format is validated');
+ const sent=await escalate(c,'Fallback Lead');assert.ok(sent.length>=1);
+ const mail=JSON.parse(sent[0].body);assert.deepEqual(mail.to,[me.user.email]);assert.equal(mail.from,'Relay <alerts@example.com>');
+ mode.resend='unauthorized';const bad=await c.call('PUT','/integrations/resend',{apiKey:'re_wrong'});mode.resend='ok';
+ assert.equal(bad.status,200,'restricted-key check passes for sending keys');
 });
 
 test('google calendar: OAuth, refresh, conflicts, reschedule, cancel and revoked access',async()=>{

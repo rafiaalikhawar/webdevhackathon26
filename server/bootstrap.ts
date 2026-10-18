@@ -42,7 +42,7 @@ export async function buildBootstrap(db:DB,ctx:Context){
  const levels=await q('SELECT step,seconds,backup_member_id FROM escalation_levels WHERE workspace_id=$1 ORDER BY step');
  const roles=await q("SELECT r.id,r.name,COALESCE(array_agg(rp.permission_code) FILTER (WHERE rp.permission_code IS NOT NULL),'{}') AS permissions FROM roles r LEFT JOIN role_permissions rp ON rp.role_id=r.id AND rp.workspace_id=r.workspace_id WHERE r.workspace_id=$1 GROUP BY r.id ORDER BY r.name");
  const integrations=ctx.permissions.has('integration.manage')?await q('SELECT provider,status,last_success_at FROM integrations WHERE workspace_id=$1 AND member_id IS NULL'):[];
- const [dest]=await q("SELECT address FROM notification_destinations WHERE workspace_id=$1 AND member_id=$2 AND provider='telegram'",[ctx.memberId]);
+ const [dest]=await q("SELECT address FROM notification_destinations WHERE workspace_id=$1 AND member_id=$2 AND provider='email'",[ctx.memberId]);
  const calendarRows=await q("SELECT member_id,status FROM integrations WHERE workspace_id=$1 AND provider='google' AND member_id IS NOT NULL AND ($2::boolean OR member_id=$3)",[ctx.permissions.has('integration.manage'),ctx.memberId]);
  const providerRows=await q('SELECT provider,status FROM integrations WHERE workspace_id=$1 AND member_id IS NULL');
  const notifications=await q('SELECT id,lead_id,kind,body,created_at,read_at FROM notifications WHERE workspace_id=$1 AND member_id=$2 ORDER BY created_at DESC LIMIT 50',[ctx.memberId]);

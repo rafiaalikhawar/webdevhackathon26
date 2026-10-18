@@ -1,6 +1,6 @@
 import {DB,transaction,pool} from '../db.js';
 import {credentials,recordEvent,markResult,publicBase,getIntegration} from './registry.js';
-import {sendTelegram} from './telegram.js';
+import {sendEmail,DEFAULT_FROM} from './resend.js';
 import {http} from './manage.js';
 const MAX_ATTEMPTS=5;
 const backoffSeconds=(attempt:number)=>Math.min(15*2**attempt,900);
@@ -19,15 +19,16 @@ export async function processOutbox(ws:string,fetchImpl=http){
   return events.length;
  });
 }
-async function deliverEscalation(db:DB,ws:string,p:{leadId:string;memberId:string;reason:string},fetchImpl:typeof http):Promise<{ok:true}|{ok:false;permanent:boolean;reason:string}>{
- const bot=await credentials(db,ws,'telegram');if(!bot)return {ok:true};// channel not configured: in-app notification already exists
- const dest=(await db.query("SELECT address FROM notification_destinations WHERE workspace_id=$1 AND member_id=$2 AND provider='telegram'",[ws,p.memberId])).rows[0];
- if(!dest)return {ok:true};
- const lead=(await db.query('SELECT l.id,l.source,c.name FROM leads l JOIN contacts c ON c.id=l.contact_id AND c.workspace_id=l.workspace_id WHERE l.id=$1 AND l.workspace_id=$2',[p.leadId,ws])).rows[0];if(!lead)return {ok:true};
- const text=`Lead escalated to you: ${lead.name}\nSource: ${lead.source}\nReason: ${reasons[p.reason]||p.reason}\nOpen: ${publicBase()}/?lead=${lead.id}`;
- const r=await sendTelegram(fetchImpl,bot.secrets.botToken,dest.address,text);
- if(r.ok){await recordEvent(db,ws,bot.id,{direction:'out',type:'alert.telegram',summary:{leadId:lead.id,memberId:p.memberId}});await markResult(db,bot.id,ws,true);return {ok:true};}
- await recordEvent(db,ws,bot.id,{direction:'out',type:'alert.telegram',status:r.transient?'retrying':'failed',summary:{leadId:lead.id,memberId:p.memberId},error:r.reason});await markResult(db,bot.id,ws,false,r.reason);
+async function deliverEscalation(db:DB,ws:string,p:{leadId:string;memberId:string;reason:string;version?:number},fetchImpl:typeof http):Promise<{ok:true}|{ok:false;permanent:boolean;reason:string}>{
+ const mail=await credentials(db,ws,'resend');if(!mail)return {ok:true};// channel not configured: in-app notification already exists
+ const dest=(await db.query("SELECT COALESCE((SELECT address FROM notification_destinations WHERE workspace_id=$1 AND member_id=$2 AND provider='email'),u.email) AS address FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.id=$2 AND m.workspace_id=$1",[ws,p.memberId])).rows[0];
+ if(!dest?.address)return {ok:true};
+ const lead=(await db.query('SELECT l.id,l.source,l.version,c.name FROM leads l JOIN contacts c ON c.id=l.contact_id AND c.workspace_id=l.workspace_id WHERE l.id=$1 AND l.workspace_id=$2',[p.leadId,ws])).rows[0];if(!lead)return {ok:true};
+ const link=`${publicBase()}/?lead=${lead.id}`;
+ const text=`Lead escalated to you: ${lead.name}\nSource: ${lead.source}\nReason: ${reasons[p.reason]||p.reason}\nOpen: ${link}`;
+ const r=await sendEmail(fetchImpl,{apiKey:mail.secrets.apiKey,from:mail.config.fromAddress||DEFAULT_FROM,to:dest.address,subject:`Lead escalated to you: ${lead.name}`,text,link,idempotencyKey:`escalation-${lead.id}-${p.memberId}-${p.version??lead.version}`});
+ if(r.ok){await recordEvent(db,ws,mail.id,{direction:'out',type:'alert.email',summary:{leadId:lead.id,memberId:p.memberId}});await markResult(db,mail.id,ws,true);return {ok:true};}
+ await recordEvent(db,ws,mail.id,{direction:'out',type:'alert.email',status:r.transient?'retrying':'failed',summary:{leadId:lead.id,memberId:p.memberId},error:r.reason});await markResult(db,mail.id,ws,false,r.reason);
  return {ok:false,permanent:!r.transient,reason:r.reason};
 }
 export async function outboxTick(){for(const w of (await pool.query('SELECT id FROM workspaces')).rows)await processOutbox(w.id);}

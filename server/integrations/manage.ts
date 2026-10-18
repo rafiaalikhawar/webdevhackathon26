@@ -8,15 +8,16 @@ import {mask} from './secrets.js';
 import {endpoints} from './endpoints.js';
 import {checkMeta} from './whatsapp.js';
 import {checkPolar} from './polar.js';
+import {checkResend} from './resend.js';
 export let http:FetchLike=(u,i)=>fetch(u,i);
 export const setHttp=(f:FetchLike)=>{http=f};
-const provider=z.enum(['polar','google','telegram','whatsapp']);
+const provider=z.enum(['polar','google','resend','whatsapp']);
 /** What each integration can and cannot do, shown on the Integrations page (I5.6). */
 const limits:Record<Provider,string>={
  polar:'Sandbox only: use a Polar sandbox organization, a sandbox access token and Polar’s test card. Card details are entered on Polar’s hosted checkout and never reach Relay. Payments are created against one product you choose; Relay sets the price for each request.',
  google:'Apps in testing status accept only listed test users, and refresh tokens may expire after 7 days. Each employee connects their own calendar.',
  whatsapp:'Meta’s test number only messages phone numbers on its allowed recipient list. Free-form replies work only within 24 hours of the customer’s last message; otherwise use an approved template. The temporary access token expires after about 24 hours and must be replaced.',
- telegram:'Alerts reach only people who have started a chat with your bot. Each employee sets their own chat id.'
+ resend:'Alerts are plain emails sent through Resend. The default sender (onboarding@resend.dev) can only email the address of your own Resend account; verify a domain in Resend to email any employee. Each employee can set their own alert address, which defaults to their login email.'
 };
 const webhookPath=(p:Provider,ws:string)=>p==='polar'?{endpoint:`${publicBase()}/api/webhooks/polar/${ws}`}:p==='google'?{redirectUri:`${publicBase()}/api/oauth/google/callback`}:p==='whatsapp'?{callbackUrl:`${publicBase()}/api/webhooks/whatsapp/${ws}`}:{};
 /** Verifies freshly entered credentials against the provider before saving them. */
@@ -24,7 +25,7 @@ async function verify(p:Provider,s:Record<string,string>,c:Record<string,string>
  if(process.env.NODE_ENV!=='production'&&process.env.INTEGRATIONS_SKIP_VERIFY==='1')return null;
  if(p==='polar')return checkPolar(http,{accessToken:s.accessToken,productId:c.productId});
  if(p==='whatsapp')return checkMeta(http,{accessToken:s.accessToken,phoneNumberId:c.phoneNumberId});
- if(p==='telegram'){const r=await callProvider(http,`${endpoints.telegram()}/bot${s.botToken}/getMe`,{});return r.status===200&&r.json?.ok?null:explain(r.status,r.json?.description);}
+ if(p==='resend')return checkResend(http,s.apiKey);
  return null;
 }
 @Controller('api/integrations')
@@ -46,6 +47,7 @@ export class IntegrationsController{
   const secrets:Record<string,string>={...(existing?.secrets||{})},config:Record<string,string>={...(existing?.config||{})};
   for(const k of spec.secrets)if(body[k])secrets[k]=body[k];for(const k of spec.config)if(k in body)config[k]=body[k];
   const missing=spec.secrets.filter(k=>!secrets[k]);if(missing.length)throw new HttpException(`Missing required fields: ${missing.join(', ')}.`,400);
+  if(p==='resend'&&config.fromAddress&&!/^([^<>@\r\n]+<[^<>@\s]+@[^<>@\s]+>|[^<>@\s]+@[^<>@\s]+)$/.test(config.fromAddress))throw new HttpException('Enter the sender as name@example.com or Name <name@example.com>.',400);
   if(p==='polar'&&!/^[0-9a-fA-F-]{36}$/.test(config.productId||''))throw new HttpException('Enter the Polar product ID (a UUID) from your sandbox dashboard → Products.',400);
   if(p==='whatsapp'&&!/^\d{5,20}$/.test(config.phoneNumberId||''))throw new HttpException('Enter the WhatsApp Phone number ID from Meta’s API setup page (digits only).',400);
   const problem=await verify(p,secrets,config);if(problem)throw new HttpException(problem,400);
