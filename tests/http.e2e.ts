@@ -128,3 +128,13 @@ test('currency is locked once money records exist; payments keep their own curre
  assert.equal((await a.call('PATCH','/workspace',{name:'Renamed'})).status,200,'renaming still works');
  assert.equal((await a.call('GET','/bootstrap')).body.data.deals[0].currency,'PKR');
 });
+
+test('an invited User can open the app with the default Member role and sees only own records',async()=>{
+ const a=new Client();const A=await a.signup('Member');
+ const email=`member-${crypto.randomUUID().slice(0,8)}@e2e.test`;const inv=await a.call('POST','/invitations',{email,baseLevel:'User'});assert.equal(inv.status,201);
+ const u=new Client();const acc=await u.call('POST','/public/accept-invite',{token:new URL(inv.body.link).searchParams.get('invite')!,workspaceId:A.workspace.id,email,password:'correct-horse-battery',name:'New Member'});assert.equal(acc.status,201);u.csrf=acc.body.csrf;u.ws=A.workspace.id;
+ const boot=await u.call('GET','/bootstrap');assert.equal(boot.status,200,'the new member can load the workspace: '+JSON.stringify(boot.body));
+ const me=await u.call('GET','/auth/me');assert.ok(me.body.permissions.includes('crm.view')&&me.body.permissions.includes('crm.create'));assert.ok(!me.body.permissions.includes('crm.view_all'),'no workspace-wide access by default');assert.ok(!me.body.permissions.includes('opportunity.value'));
+ assert.equal((await u.call('POST','/custom-fields',{pipelineId:boot.body.meta.pipelineId,name:'x',type:'text'})).status,403);
+ const roles=(await a.call('GET','/bootstrap')).body.meta.roles;assert.ok(roles.some((r:any)=>r.name==='Member'),'Owner can see and edit the Member role');
+});

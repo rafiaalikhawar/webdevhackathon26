@@ -184,13 +184,14 @@ function App({boot,refresh,onLogout}:{boot:Boot;refresh:()=>Promise<void>;onLogo
 function Root(){
  const formMatch=location.pathname.match(/^\/form\/([0-9a-f-]{36})$/i);
  if(formMatch)return <PublicForm workspaceId={formMatch[1]}/>;
- const [boot,setBoot]=useState<Boot|null>(null),[state,setState]=useState<'loading'|'auth'|'error'>('loading'),[notice,setNotice]=useState('');
- const load=async()=>{try{setBoot(await api<Boot>('GET','/bootstrap'));setState('loading')}catch(e:any){if(e?.status===401||e?.status===404||e?.status===400||!localStorage.getItem('relay-workspace')){setBoot(null);setState('auth')}else if(!boot)setState('error')}};
+ const [boot,setBoot]=useState<Boot|null>(null),[state,setState]=useState<'loading'|'auth'|'error'|'noaccess'>('loading'),[notice,setNotice]=useState('');
+ const load=async()=>{try{setBoot(await api<Boot>('GET','/bootstrap'));setState('loading')}catch(e:any){if(e?.status===401||e?.status===404||e?.status===400||!localStorage.getItem('relay-workspace')){setBoot(null);setState('auth')}else if(e?.status===403)setState('noaccess');else if(!boot)setState('error')}};
  const had=React.useRef(false);had.current=!!boot;
  useEffect(()=>{onSessionExpired(()=>{if(!had.current)return;setBoot(null);setNotice('Your session expired. Please sign in again.');setState('auth')});load()},[]);
  useEffect(()=>{if(!boot)return;const ws=localStorage.getItem('relay-workspace')||'';let es:EventSource|null=null;try{es=new EventSource(`/api/events?ws=${ws}`);es.addEventListener('change',()=>load())}catch{/* fall back to polling */}const t=setInterval(()=>{if(!document.hidden)load()},30000);return()=>{es?.close();clearInterval(t)}},[!!boot]);
  if(boot)return <App boot={boot} refresh={load} onLogout={()=>{setWorkspaceId('');setBoot(null);setNotice('');setState('auth')}}/>;
  if(state==='auth')return <AuthScreen initialMode={new URLSearchParams(location.search).get('auth')==='signup'?'signup':'login'} notice={notice} onDone={()=>{setNotice('');setState('loading');load()}}/>;
+ if(state==='noaccess')return <div className="loading-screen" role="alert"><div><p>Your account does not have access to any records yet.</p><p className="muted">Ask the workspace Owner to give you a role in Settings → Roles &amp; permissions.</p><button className="btn" onClick={async()=>{try{await api('POST','/auth/logout')}catch{/* already signed out */}setWorkspaceId('');setBoot(null);setState('auth')}}>Sign out</button> <button className="btn" onClick={()=>{setState('loading');load()}}>Check again</button></div></div>;
  if(state==='error')return <div className="loading-screen" role="alert"><div><p>We could not reach the RESX server.</p><button className="btn" onClick={()=>{setState('loading');load()}}>Try again</button></div></div>;
  return <div className="loading-screen" role="status">Loading your workspace…</div>;
 }
