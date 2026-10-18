@@ -1,6 +1,7 @@
+// Deep links from emails, Google OAuth and payment returns (/?lead=…, /?calendar=…, /?payment=…) open the app, not the marketing page.
 // Each document loads one frontend so their global styles and animation systems stay isolated.
 const params = new URLSearchParams(location.search);
-const workspaceRoute = location.pathname === '/workspace' || location.pathname.startsWith('/form/') || params.has('invite');
+const workspaceRoute = location.pathname === '/workspace' || location.pathname.startsWith('/form/') || params.has('invite') || params.has('lead') || params.has('calendar') || params.has('payment');
 
 if (workspaceRoute) {
   document.title = 'RESX — Everything, in motion.';
