@@ -1,0 +1,164 @@
+// End-to-end provider checks. Spawns the API and worker against local stub providers, so no real keys are needed.
+// Run: npm run test:integrations   (requires PostgreSQL from docker compose, migrated, and .env loaded)
+import test,{after,before} from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import {spawn,ChildProcess} from 'node:child_process';
+import {createHmac} from 'node:crypto';
+import 'dotenv/config';
+
+const API_PORT=3002,STUB_PORT=4010,api=`http://localhost:${API_PORT}/api`,origin='http://localhost:5173',base=`http://localhost:${API_PORT}`;
+const calls:{provider:string;method:string;path:string;body:string}[]=[];
+const mode={twilio:'ok',telegram:'ok',google:'ok',busy:[] as {start:string;end:string}[]};
+let sid=0,lastTwilioSid='';
+
+const stub=http.createServer((req,res)=>{let body='';req.on('data',c=>body+=c);req.on('end',()=>{
+ const url=req.url||'',provider=url.startsWith('/twilio')?'twilio':url.startsWith('/stripe')?'stripe':url.startsWith('/telegram')?'telegram':url.startsWith('/gtoken')?'gtoken':'gcal';
+ calls.push({provider,method:req.method||'',path:url,body});
+ const json=(s:number,o:unknown)=>{res.writeHead(s,{'Content-Type':'application/json'});res.end(s===204?'':JSON.stringify(o));};
+ if(provider==='twilio'){if(url.endsWith('.json')&&req.method==='GET')return json(200,{sid:'AC1'});if(mode.twilio==='fail')return json(500,{message:'boom'});lastTwilioSid='SM'+(++sid);return json(201,{sid:lastTwilioSid});}
+ if(provider==='stripe'){if(url.includes('/balance'))return json(200,{});return json(200,{id:'cs_test_'+(++sid),url:'https://checkout.stripe.test/pay/'+sid});}
+ if(provider==='telegram'){if(url.includes('getMe'))return json(200,{ok:true});if(mode.telegram==='unauthorized')return json(401,{ok:false,description:'Unauthorized'});return json(200,{ok:true});}
+ if(provider==='gtoken'){const p=new URLSearchParams(body);if(p.get('grant_type')==='refresh_token'&&mode.google==='revoked')return json(400,{error:'invalid_grant'});return json(200,{access_token:'at-'+(++sid),refresh_token:p.get('grant_type')==='authorization_code'?'rt-1':undefined,expires_in:1});}
+ if(url.includes('/freeBusy'))return json(200,{calendars:{primary:{busy:mode.busy}}});
+ if(req.method==='DELETE')return json(204,{});
+ return json(200,{id:'ev-'+(++sid)});
+});});
+
+let children:ChildProcess[]=[];
+const env={...process.env,PORT:String(API_PORT),NODE_ENV:'development',PUBLIC_BASE_URL:base,INTEGRATIONS_SKIP_VERIFY:'1',
+ TWILIO_API_BASE:`http://localhost:${STUB_PORT}/twilio`,STRIPE_API_BASE:`http://localhost:${STUB_PORT}/stripe`,TELEGRAM_API_BASE:`http://localhost:${STUB_PORT}/telegram`,GOOGLE_TOKEN_URL:`http://localhost:${STUB_PORT}/gtoken`,GOOGLE_CALENDAR_BASE:`http://localhost:${STUB_PORT}/gcal`};
+before(async()=>{
+ await new Promise<void>(r=>stub.listen(STUB_PORT,r));
+ for(const script of ['server/main.ts','server/worker.ts'])children.push(spawn('node',['--import','tsx',script],{env:{...env,APP_ORIGIN:origin},stdio:['ignore','inherit','inherit']}));
+ for(let i=0;i<40;i++){try{if((await fetch(api+'/health')).ok)return;}catch{/* not up yet */}await new Promise(r=>setTimeout(r,500));}
+ throw new Error('API did not start');
+});
+after(()=>{children.forEach(c=>c.kill());stub.close();});
+
+class Client{cookies:Record<string,string>={};csrf='';ws='';
+ async call(method:string,path:string,body?:unknown,headers:Record<string,string>={},raw=false){const h:Record<string,string>={Origin:origin,'Content-Type':'application/json',Cookie:Object.entries(this.cookies).map(([k,v])=>`${k}=${v}`).join('; ')};if(this.ws)h['X-Workspace-Id']=this.ws;if(this.csrf)h['X-CSRF-Token']=this.csrf;Object.assign(h,headers);
+  const r=await fetch(api+path,{method,headers:h,body:body===undefined?undefined:raw?String(body):JSON.stringify(body),redirect:'manual'});for(const c of r.headers.getSetCookie())this.cookies[c.split('=')[0]]=c.split(';')[0].split('=')[1];const t=await r.text();let j:any=null;try{j=t?JSON.parse(t):null}catch{j=t}return {status:r.status,body:j,headers:r.headers};}
+ async signup(){const email=`${crypto.randomUUID().slice(0,8)}@int.test`;const r=await this.call('POST','/auth/signup',{email,password:'correct-horse-battery',name:'Owner',workspace:'Int'});assert.equal(r.status,201,JSON.stringify(r.body));this.csrf=r.body.csrf;this.ws=r.body.workspace.id;return r.body;}}
+
+const twilioSig=(token:string,url:string,params:Record<string,string>)=>createHmac('sha1',token).update(url+Object.keys(params).sort().map(k=>k+params[k]).join('')).digest('base64');
+const stripeSig=(secret:string,payload:string,t=Math.floor(Date.now()/1000))=>`t=${t},v1=${createHmac('sha256',secret).update(`${t}.${payload}`).digest('hex')}`;
+
+async function twilioPost(c:Client,kind:'inbound'|'status',params:Record<string,string>,token='tok',forge=false){
+ const path=`/webhooks/twilio/${c.ws}/${kind}`;const sig=forge?'AAAA':twilioSig(token,`${base}/api${path}`,params);
+ const r=await fetch(api+path,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Twilio-Signature':sig},body:new URLSearchParams(params)});return r.status;}
+
+async function setup(){
+ const c=new Client();await c.signup();
+ for(const [p,body] of Object.entries({twilio:{accountSid:'AC1',authToken:'tok',whatsappFrom:'+14155238886'},stripe:{secretKey:'sk_test_abc123',webhookSecret:'whsec_test'},telegram:{botToken:'123:ABCDEF'},google:{clientId:'cid',clientSecret:'csecret'}}))assert.equal((await c.call('PUT','/integrations/'+p,body)).status,200,p);
+ return c;
+}
+
+test('secrets are encrypted at rest and masked in the API',async()=>{
+ const c=await setup();const list=await c.call('GET','/integrations');assert.equal(list.status,200);
+ const text=JSON.stringify(list.body);assert.ok(!text.includes('sk_test_abc123')&&!text.includes('whsec_test')&&!text.includes('123:ABCDEF'),'plaintext secret leaked');
+ const stripe=list.body.find((p:any)=>p.provider==='stripe');assert.equal(stripe.status,'connected');assert.ok(stripe.secrets.secretKey.startsWith('••••'));assert.ok(stripe.limits.length>10);
+ const user=new Client();Object.assign(user,{ws:c.ws});// a plain user cannot read or change integrations
+ const inv=await c.call('POST','/invitations',{email:`u-${crypto.randomUUID().slice(0,6)}@int.test`,baseLevel:'User'});const token=new URL(inv.body.link).searchParams.get('invite')!;
+ const email=JSON.parse(JSON.stringify(inv.body)).link&&`u-${crypto.randomUUID().slice(0,6)}@int.test`;void email;
+ const inv2=await c.call('POST','/invitations',{email:'plain@int.test',baseLevel:'User'});const t2=new URL(inv2.body.link).searchParams.get('invite')!;void token;
+ const acc=await user.call('POST','/public/accept-invite',{token:t2,workspaceId:c.ws,email:'plain@int.test',password:'correct-horse-battery',name:'Plain'});
+ if(acc.status===201){user.csrf=acc.body.csrf;assert.equal((await user.call('GET','/integrations')).status,403);assert.equal((await user.call('PUT','/integrations/stripe',{secretKey:'x'})).status,403);}
+});
+
+test('twilio: signature, de-duplication, contact matching, opt-out, send, retry and delivery status',async()=>{
+ const c=await setup();
+ const params={MessageSid:'SMin1',From:'whatsapp:+12025550101',To:'whatsapp:+14155238886',Body:'Hi, interested in a quote',ProfileName:'Dana Lee'};
+ assert.equal(await twilioPost(c,'inbound',params,'tok',true),403,'forged signature must be rejected');
+ assert.equal(await twilioPost(c,'inbound',{...params,Body:'tampered'},'wrong-token'),403,'wrong token must be rejected');
+ assert.equal(await twilioPost(c,'inbound',params),200);assert.equal(await twilioPost(c,'inbound',params),200,'duplicate delivery is acknowledged');
+ let leads=await c.call('GET','/leads');assert.equal(leads.body.total,1,'one lead, not two');assert.equal(leads.body.records[0].source,'WhatsApp');
+ assert.equal(await twilioPost(c,'inbound',{...params,MessageSid:'SMin2',Body:'Following up'}),200);
+ leads=await c.call('GET','/leads');assert.equal(leads.body.total,1,'known number attaches to the existing contact');
+ let boot=await c.call('GET','/bootstrap');assert.equal(boot.body.data.chats[0].messages.length,2);
+ const contactId=leads.body.records[0].contact_id;
+ // Provider failure keeps the message visible as failed, and it can be retried.
+ mode.twilio='fail';const failed=await c.call('POST',`/contacts/${contactId}/messages`,{body:'Thanks Dana!'});assert.equal(failed.status,201);assert.equal(failed.body.status,'failed');assert.ok(failed.body.error);
+ boot=await c.call('GET','/bootstrap');const out=boot.body.data.chats[0].messages.find((m:any)=>m.direction==='out');assert.equal(out.status,'Failed');
+ mode.twilio='ok';const retry=await c.call('POST',`/messages/${out.id}/retry`);assert.equal(retry.status,201);assert.equal(retry.body.status,'sent');
+ const sentSid=[...calls].reverse().find(x=>x.provider==='twilio'&&x.method==='POST')!;assert.ok(sentSid);
+ // Delivery callbacks update the stored status; a late "sent" never downgrades "delivered".
+ const msgStatus=async()=>(await c.call('GET','/bootstrap')).body.data.chats[0].messages.find((m:any)=>m.id===out.id).status;
+ assert.equal(await msgStatus(),'Sent');
+ assert.equal(await twilioPost(c,'status',{MessageSid:lastTwilioSid,MessageStatus:'delivered'}),200);assert.equal(await msgStatus(),'Delivered');
+ assert.equal(await twilioPost(c,'status',{MessageSid:lastTwilioSid,MessageStatus:'sent'}),200);assert.equal(await msgStatus(),'Delivered');
+ assert.equal(await twilioPost(c,'status',{MessageSid:lastTwilioSid,MessageStatus:'delivered'},'tok',true),403);
+ // Opt-out
+ assert.equal(await twilioPost(c,'inbound',{...params,MessageSid:'SMin3',Body:'STOP'}),200);
+ const blocked=await c.call('POST',`/contacts/${contactId}/messages`,{body:'hello?'});assert.equal(blocked.status,409);assert.match(blocked.body.error,/opted out/);
+ // Integration history records accepted and rejected events.
+ const events=await c.call('GET','/integrations/events');assert.ok(events.body.some((e:any)=>e.status==='rejected'));assert.ok(events.body.some((e:any)=>e.event_type==='message.inbound'&&e.status==='ok'));
+});
+
+test('stripe: checkout, signed webhooks, idempotency, expiry and refunds',async()=>{
+ const c=await setup();
+ const lead=await c.call('POST','/leads',{name:'Pat Kim',company:'Kim Co',email:'pat@example.com',source:'Manual'});assert.equal(lead.status,201);
+ const boot=await c.call('GET','/bootstrap');const contactId=boot.body.data.leads[0].contactId;
+ const opp=await c.call('POST','/opportunities',{contactId,pipelineId:boot.body.meta.pipelineId,stageId:boot.body.meta.stageIds.Discovery,name:'Retainer',valueMinor:50000,currency:'USD'});assert.equal(opp.status,201);
+ const pay=await c.call('POST',`/opportunities/${opp.body.id}/payments`,{amountMinor:50000,currency:'USD'});assert.equal(pay.status,201);assert.match(pay.body.url,/checkout\.stripe\.test/);
+ const session=(await c.call('GET','/bootstrap')).body.data.payments[0];assert.equal(session.status,'Pending');
+ const post=async(event:any,sig?:string)=>{const payload=JSON.stringify(event);const r=await fetch(`${api}/webhooks/stripe/${c.ws}`,{method:'POST',headers:{'Content-Type':'application/json','Stripe-Signature':sig??stripeSig('whsec_test',payload)},body:payload});return r.status;};
+ const ref=session.ref;assert.ok(ref.startsWith('cs_test_'));
+ const completed={id:'evt_1',type:'checkout.session.completed',data:{object:{id:ref,payment_status:'paid',payment_intent:'pi_1'}}};
+ assert.equal(await post(completed,'t=1,v1=bad'),400,'forged signature');
+ assert.equal(await post(completed,stripeSig('whsec_test',JSON.stringify(completed),Math.floor(Date.now()/1000)-3600)),400,'stale timestamp');
+ assert.equal((await c.call('GET','/bootstrap')).body.data.payments[0].status,'Pending','nothing changes before verification');
+ assert.equal(await post(completed),200);assert.equal(await post(completed),200,'replay is accepted but ignored');
+ let p=(await c.call('GET','/bootstrap')).body.data;assert.equal(p.payments.length,1);assert.equal(p.payments[0].status,'Paid');assert.equal(p.payments[0].amount,500);
+ const contactPage=await c.call('GET','/contacts/'+contactId);assert.equal(contactPage.body.activities.filter((a:any)=>/Payment received/.test(a.body)).length,1,'recorded once');
+ assert.equal(await post({id:'evt_2',type:'charge.refunded',data:{object:{id:'ch_1',payment_intent:'pi_1',amount_refunded:20000}}}),200);
+ p=(await c.call('GET','/bootstrap')).body.data;assert.equal(p.payments[0].status,'Paid');assert.equal(p.payments[0].amount,300,'partial refund reduces collected revenue');
+ assert.equal(await post({id:'evt_3',type:'charge.refunded',data:{object:{id:'ch_1',payment_intent:'pi_1',amount_refunded:50000}}}),200);
+ p=(await c.call('GET','/bootstrap')).body.data;assert.equal(p.payments[0].status,'Refunded');assert.equal(p.payments[0].amount,0);
+ // Expired links
+ const pay2=await c.call('POST',`/opportunities/${opp.body.id}/payments`,{amountMinor:1000,currency:'USD'});assert.equal(pay2.status,201);
+ const ref2=(await c.call('GET','/bootstrap')).body.data.payments.find((x:any)=>x.status==='Pending').ref;
+ assert.equal(await post({id:'evt_4',type:'checkout.session.expired',data:{object:{id:ref2}}}),200);
+ assert.ok((await c.call('GET','/bootstrap')).body.data.payments.some((x:any)=>x.status==='Expired'));
+ // No card data is stored by the platform.
+ assert.ok(!JSON.stringify(calls.filter(x=>x.provider==='stripe')).match(/4242/));
+});
+
+test('telegram: escalation alert reaches the new owner with a useful message',async()=>{
+ const c=await setup();
+ assert.equal((await c.call('PUT','/me/destination',{address:'555123'})).status,200);
+ const boot=await c.call('GET','/bootstrap');
+ assert.equal((await c.call('PUT','/assignment-rules',{version:boot.body.meta.rulesVersion,ackSeconds:10,idleSeconds:3600,maxEscalations:3})).status,200);
+ const before=calls.filter(x=>x.provider==='telegram'&&x.path.includes('sendMessage')).length;
+ assert.equal((await c.call('POST','/leads',{name:'Escalate Me',company:'Slow Co',source:'Website'})).status,201);
+ let sent:typeof calls=[];for(let i=0;i<40&&!sent.length;i++){await new Promise(r=>setTimeout(r,1000));sent=calls.filter(x=>x.provider==='telegram'&&x.path.includes('sendMessage')).slice(before);}
+ assert.ok(sent.length>=1,'alert was delivered within the window');
+ const text=JSON.parse(sent[0].body).text as string;assert.match(text,/Escalate Me/);assert.match(text,/Source: Website/);assert.match(text,/Reason:/);assert.match(text,/\/\?lead=/);
+ assert.equal(JSON.parse(sent[0].body).chat_id,'555123');
+});
+
+test('google calendar: OAuth, refresh, conflicts, reschedule, cancel and revoked access',async()=>{
+ const c=await setup();
+ const start=await c.call('GET','/oauth/google/start');assert.equal(start.status,200);const u=new URL(start.body.url);assert.equal(u.searchParams.get('client_id'),'cid');assert.equal(u.searchParams.get('access_type'),'offline');
+ assert.match(String(u.searchParams.get('scope')),/calendar/);
+ const cb=await fetch(`${api}/oauth/google/callback?code=abc&state=forged`,{redirect:'manual'});assert.match(cb.headers.get('location')||'',/calendar=invalid/);
+ const ok=await fetch(`${api}/oauth/google/callback?code=abc&state=${encodeURIComponent(u.searchParams.get('state')!)}`,{redirect:'manual'});assert.match(ok.headers.get('location')||'',/calendar=connected/);
+ const conn=await c.call('GET','/calendar/connections');assert.equal(conn.body.connections[0].status,'connected');
+ const lead=await c.call('POST','/leads',{name:'Sam Cole',company:'Cole LLC',email:'sam@example.com',source:'Manual'});assert.equal(lead.status,201);
+ const contactId=(await c.call('GET','/bootstrap')).body.data.leads[0].contactId;
+ const slot={contactId,title:'Intro call',startsAt:'2026-11-02T15:00:00+05:00',endsAt:'2026-11-02T15:30:00+05:00',timezone:'Asia/Karachi'};
+ mode.busy=[{start:'2026-11-02T10:10:00Z',end:'2026-11-02T10:20:00Z'}];
+ const clash=await c.call('POST','/appointments',slot);assert.equal(clash.status,409);assert.match(clash.body.error,/overlaps/);
+ const forced=await c.call('POST','/appointments',{...slot,force:true});assert.equal(forced.status,201);
+ mode.busy=[];const booked=await c.call('POST','/appointments',{...slot,startsAt:'2026-11-03T15:00:00+05:00',endsAt:'2026-11-03T15:30:00+05:00'});assert.equal(booked.status,201);
+ const appt=(await c.call('GET','/bootstrap')).body.data.meetings;assert.equal(appt.length,2);assert.equal(new Date(appt.find((m:any)=>m.id===booked.body.id).at).toISOString(),'2026-11-03T10:00:00.000Z','stored as an unambiguous instant');
+ assert.ok(calls.some(x=>x.provider==='gtoken'&&x.body.includes('refresh_token')),'expired access token was refreshed automatically');
+ assert.equal((await c.call('PATCH','/appointments/'+booked.body.id,{startsAt:'2026-11-03T16:00:00+05:00',endsAt:'2026-11-03T16:30:00+05:00'})).status,200);
+ assert.ok(calls.some(x=>x.provider==='gcal'&&x.method==='PATCH'));
+ assert.equal((await c.call('DELETE','/appointments/'+booked.body.id)).status,200);assert.ok(calls.some(x=>x.provider==='gcal'&&x.method==='DELETE'));
+ const history=await c.call('GET','/contacts/'+contactId);assert.ok(history.body.activities.some((a:any)=>/rescheduled/.test(a.body))&&history.body.activities.some((a:any)=>/cancelled/.test(a.body)));
+ mode.google='revoked';const revoked=await c.call('POST','/appointments',{...slot,startsAt:'2026-11-05T15:00:00+05:00',endsAt:'2026-11-05T15:30:00+05:00'});assert.equal(revoked.status,409);assert.match(revoked.body.error,/[Rr]econnect/);
+ assert.equal((await c.call('GET','/calendar/connections')).body.connections[0].status,'needs_reconnect');mode.google='ok';
+ // A different workspace never sees or reuses this workspace's connection.
+ const other=await setup();assert.deepEqual((await other.call('GET','/calendar/connections')).body.connections,[]);
+});

@@ -1,0 +1,45 @@
+{
+  "name": "relay-crm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.web.json && vite build",
+    "dev": "vite --host 0.0.0.0",
+    "api": "node --import tsx server/main.ts",
+    "worker": "node --import tsx server/worker.ts",
+    "db:migrate": "node --import tsx server/migrate.ts",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:http": "node --import tsx --test tests/http.e2e.ts",
+    "test:integrations": "node --import tsx --test --test-concurrency=1 tests/integrations.e2e.ts",
+    "typecheck:server": "tsc -p tsconfig.server.json"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.1.0",
+    "@nestjs/core": "^11.1.0",
+    "@nestjs/platform-express": "^11.1.0",
+    "argon2": "^0.44.0",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^17.2.0",
+    "helmet": "^8.1.0",
+    "lucide-react": "^0.468.0",
+    "pg": "^8.16.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.3.10",
+    "@types/cookie-parser": "^1.4.9",
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.1.0"
+  }
+}
