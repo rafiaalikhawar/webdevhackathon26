@@ -9,7 +9,9 @@ export type Payment = {id:string;leadId:string;dealId:string;amount:number;statu
 export type Data = {leads:Lead[];team:Person[];deals:Deal[];events:Event[];meetings:Meeting[];chats:Chat[];payments:Payment[];stages:string[];settings:{ackSeconds:number;idleHours:number;maxLeads:number;workspace:string;currency:string};visibleMetrics?:string[];customFields:{id:string;name:string;type:string;requiredStage:string}[]};
 const ago=(minutes:number)=>new Date(Date.now()-minutes*60000).toISOString();
 const ahead=(minutes:number)=>new Date(Date.now()+minutes*60000).toISOString();
-export const money=(n:number)=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(n);
+let displayCurrency='USD';
+export const setDisplayCurrency=(c:string)=>{displayCurrency=c||'USD'};
+export const money=(n:number)=>new Intl.NumberFormat('en-US',{style:'currency',currency:displayCurrency,maximumFractionDigits:0}).format(n);
 export const initials=(s:string)=>s.split(' ').map(p=>p[0]).slice(0,2).join('');
 export const relative=(date:string)=>{const m=Math.max(0,Math.floor((Date.now()-new Date(date).getTime())/60000));return m<1?'Just now':m<60?`${m}m ago`:m<1440?`${Math.floor(m/60)}h ago`:`${Math.floor(m/1440)}d ago`;};
 export const isRecovery=(l:Lead,d:Data)=>l.status!=='Closed'&&((l.status==='New'&&Date.parse(l.deadline)<Date.now())||l.escalations>=2||Date.parse(l.lastActivity)<Date.now()-d.settings.idleHours*3600000);
