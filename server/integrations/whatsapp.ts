@@ -19,7 +19,7 @@ export function explainMeta(status:number,err?:{code?:number;message?:string}):s
  if(code===190)return 'The WhatsApp access token expired or was revoked. Generate a new token in Meta and update it on the Integrations page.';
  if(code===131047||code===131026)return 'WhatsApp only allows free-form replies within 24 hours of the customer’s last message. Send an approved template instead.';
  if(code===131030)return 'This phone number is not on the allowed recipient list for the WhatsApp test number. Add it in Meta’s API setup page.';
- if(code===130429||code===80007||status===429)return 'WhatsApp is rate limiting requests. Relay will retry shortly.';
+ if(code===130429||code===80007||status===429)return 'WhatsApp is rate limiting requests. RESX will retry shortly.';
  if(code===132000||code===132001)return 'The WhatsApp template does not exist or its parameters do not match. Check the template name and language.';
  return explain(status,err?.message);
 }

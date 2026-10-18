@@ -14,7 +14,7 @@ export const setHttp=(f:FetchLike)=>{http=f};
 const provider=z.enum(['polar','google','resend','whatsapp']);
 /** What each integration can and cannot do, shown on the Integrations page (I5.6). */
 const limits:Record<Provider,string>={
- polar:'Sandbox only: use a Polar sandbox organization, a sandbox access token and Polar’s test card. Card details are entered on Polar’s hosted checkout and never reach Relay. Payments are created against one product you choose; Relay sets the price for each request.',
+ polar:'Sandbox only: use a Polar sandbox organization, a sandbox access token and Polar’s test card. Card details are entered on Polar’s hosted checkout and never reach RESX. Payments are created against one product you choose; RESX sets the price for each request.',
  google:'Apps in testing status accept only listed test users, and refresh tokens may expire after 7 days. Each employee connects their own calendar.',
  whatsapp:'Meta’s test number only messages phone numbers on its allowed recipient list. Free-form replies work only within 24 hours of the customer’s last message; otherwise use an approved template. The temporary access token expires after about 24 hours and must be replaced.',
  resend:'Alerts are plain emails sent through Resend. The default sender (onboarding@resend.dev) can only email the address of your own Resend account; verify a domain in Resend to email any employee. Each employee can set their own alert address, which defaults to their login email.'

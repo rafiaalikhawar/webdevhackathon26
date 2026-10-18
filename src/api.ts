@@ -1,4 +1,4 @@
-// Thin client for the Relay API. Session is an HttpOnly cookie; the CSRF token is readable and echoed in a header.
+// Thin client for the RESX API. Session is an HttpOnly cookie; the CSRF token is readable and echoed in a header.
 export class ApiError extends Error{constructor(message:string,public status:number){super(message);}}
 const KEY='relay-workspace';
 export const workspaceId=()=>{try{return localStorage.getItem(KEY)||''}catch{return ''}};

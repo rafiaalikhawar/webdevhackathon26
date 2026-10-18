@@ -123,10 +123,10 @@ test('email alerts: escalation reaches the chosen address with a useful message'
 });
 
 test('email alerts: default to the login email, and a rejected key is reported',async()=>{
- const c=new Client();const me=await c.signup();assert.equal((await c.call('PUT','/integrations/resend',{apiKey:'re_test_123456',fromAddress:'Relay <alerts@example.com>'})).status,200);
+ const c=new Client();const me=await c.signup();assert.equal((await c.call('PUT','/integrations/resend',{apiKey:'re_test_123456',fromAddress:'RESX <alerts@example.com>'})).status,200);
  assert.equal((await c.call('PUT','/integrations/resend',{apiKey:'re_x',fromAddress:'bad sender'})).status,400,'sender format is validated');
  const sent=await escalate(c,'Fallback Lead');assert.ok(sent.length>=1);
- const mail=JSON.parse(sent[0].body);assert.deepEqual(mail.to,[me.user.email]);assert.equal(mail.from,'Relay <alerts@example.com>');
+ const mail=JSON.parse(sent[0].body);assert.deepEqual(mail.to,[me.user.email]);assert.equal(mail.from,'RESX <alerts@example.com>');
  mode.resend='unauthorized';const bad=await c.call('PUT','/integrations/resend',{apiKey:'re_wrong'});mode.resend='ok';
  assert.equal(bad.status,200,'restricted-key check passes for sending keys');
 });

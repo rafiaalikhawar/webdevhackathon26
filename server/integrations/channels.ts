@@ -32,7 +32,7 @@ export async function deliverMessage(ws:string,messageId:string){
   const m=(await db.query("SELECT m.*,c.contact_id FROM messages m JOIN conversations c ON c.id=m.conversation_id AND c.workspace_id=m.workspace_id WHERE m.id=$1 AND m.workspace_id=$2 AND m.direction='out' FOR UPDATE",[messageId,ws])).rows[0];
   if(!m)throw nf();if(m.status==='sent'||m.status==='delivered')return null;
   const contact=(await db.query('SELECT phone,opted_out FROM contacts WHERE id=$1 AND workspace_id=$2',[m.contact_id,ws])).rows[0];
-  if(contact.opted_out)throw new HttpException('This contact opted out of messages, so Relay cannot send to them.',409);
+  if(contact.opted_out)throw new HttpException('This contact opted out of messages, so RESX cannot send to them.',409);
   const meta=await credentials(db,ws,'whatsapp');
   if(!meta)throw new HttpException('Messaging is not connected. An Admin can connect WhatsApp (Meta) on the Integrations page.',409);
   const windowClosed=!!meta&&!m.template&&!(await db.query("SELECT 1 FROM messages WHERE workspace_id=$1 AND conversation_id=$2 AND direction='in' AND created_at>now()-interval '24 hours' LIMIT 1",[ws,m.conversation_id])).rows[0];
@@ -60,7 +60,7 @@ export class ChannelController{
   const messageId=await transaction(ctx.workspaceId,async db=>{
    await lockRules(db,ctx.workspaceId);
    const c=(await db.query('SELECT * FROM contacts WHERE id=$1 AND workspace_id=$2 AND archived_at IS NULL',[uuid.parse(contactId),ctx.workspaceId])).rows[0];if(!c)throw nf();requireRecord(ctx,c.owner_id);
-   if(c.opted_out)throw new HttpException('This contact opted out of messages, so Relay cannot send to them.',409);
+   if(c.opted_out)throw new HttpException('This contact opted out of messages, so RESX cannot send to them.',409);
    if(!c.phone)throw new HttpException('This contact has no phone number. Add one before sending a message.',400);
    const conv=(await db.query("INSERT INTO conversations(workspace_id,contact_id,owner_id,channel) VALUES($1,$2,$3,'whatsapp') ON CONFLICT(workspace_id,contact_id,channel) DO UPDATE SET owner_id=EXCLUDED.owner_id RETURNING id",[ctx.workspaceId,c.id,c.owner_id])).rows[0];
    const m=(await db.query("INSERT INTO messages(workspace_id,conversation_id,body,direction,status,template) VALUES($1,$2,$3,'out','queued',$4) RETURNING id",[ctx.workspaceId,conv.id,f.body,f.template?JSON.stringify(f.template):null])).rows[0];

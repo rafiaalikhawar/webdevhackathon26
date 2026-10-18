@@ -37,8 +37,8 @@ export async function markResult(db:DB,integrationId:string,ws:string,ok:boolean
 export function explain(status:number,detail=''):string{
  if(status===0)return 'The provider could not be reached. It will be retried automatically.';
  if(status===401||status===403)return 'The provider rejected the saved credentials. Reconnect the integration with fresh keys.';
- if(status===429)return 'The provider is rate limiting requests. Relay will retry shortly.';
- if(status>=500)return 'The provider had a temporary problem. Relay will retry.';
+ if(status===429)return 'The provider is rate limiting requests. RESX will retry shortly.';
+ if(status>=500)return 'The provider had a temporary problem. RESX will retry.';
  return 'The provider refused the request'+(detail?`: ${detail.slice(0,160)}`:'.');
 }
 export const isTransient=(status:number)=>status===0||status===429||status>=500;

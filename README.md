@@ -1,4 +1,4 @@
-# Relay — Every lead, accounted for.
+# RESX — Everything, in motion.
 
 A premium Attio-inspired CRM foundation for the Unified Business Management Platform brief.
 

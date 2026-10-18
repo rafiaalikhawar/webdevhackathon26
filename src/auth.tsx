@@ -16,7 +16,7 @@ export function AuthScreen({onDone,notice}:{onDone:()=>void;notice?:string}){
   }catch(err){setError(errorText(err));}finally{setBusy(false);}
  }
  return <div className="auth-page"><form className="auth-card" onSubmit={submit} aria-labelledby="auth-title">
-  <div className="brand-lockup"><span className="brand-mark"><span/><span/><span/></span><span className="brand-name">relay<span className="brand-period">.</span></span></div>
+  <div className="brand-lockup"><span className="resx-logo large">RESX</span><span className="resx-tagline">EVERYTHING, IN MOTION.</span></div>
   <h1 id="auth-title">{mode==='login'?'Welcome back':mode==='signup'?'Create your workspace':'Join your team'}</h1>
   <p className="auth-sub">{mode==='login'?'Sign in to keep every lead accounted for.':mode==='signup'?'You will be the Owner of a new, private workspace.':'Create your account to accept the invitation.'}</p>
   {notice&&<div className="notice warning compact" role="status">{notice}</div>}

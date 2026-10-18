@@ -2,7 +2,7 @@
 
 ## Product principle
 
-Relay is a connected CRM whose central responsibility is lead accountability. The interface prioritizes incoming leads, acknowledgment deadlines, recovery and a complete customer view. A restrained light design uses thin borders, compact tables, contextual drawers and touch/keyboard equivalents to drag-and-drop.
+RESX is a connected CRM whose central responsibility is lead accountability. The interface prioritizes incoming leads, acknowledgment deadlines, recovery and a complete customer view. A restrained light design uses thin borders, compact tables, contextual drawers and touch/keyboard equivalents to drag-and-drop.
 
 ## Separation of responsibilities
 
