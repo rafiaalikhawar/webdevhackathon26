@@ -9,12 +9,18 @@
     "api": "node --import tsx server/main.ts",
     "worker": "node --import tsx server/worker.ts",
     "db:migrate": "node --import tsx server/migrate.ts",
+    "db:provision": "node --import tsx server/provision-role.ts",
+    "db:migrate:neon": "DOTENV_CONFIG_PATH=.env.neon node --import tsx server/migrate.ts && DOTENV_CONFIG_PATH=.env.neon node --import tsx server/provision-role.ts",
+    "api:neon": "DOTENV_CONFIG_PATH=.env.neon node --import tsx server/main.ts",
+    "worker:neon": "DOTENV_CONFIG_PATH=.env.neon node --import tsx server/worker.ts",
     "test": "node --import tsx --test tests/*.test.ts",
     "test:http": "node --import tsx --test tests/http.e2e.ts",
     "test:integrations": "node --import tsx --test --test-concurrency=1 tests/integrations.e2e.ts",
     "typecheck:server": "tsc -p tsconfig.server.json"
   },
   "dependencies": {
+    "@neon/config": "^1.9.2",
+    "@neon/env": "^1.6.3",
     "@nestjs/common": "^11.1.0",
     "@nestjs/core": "^11.1.0",
     "@nestjs/platform-express": "^11.1.0",
