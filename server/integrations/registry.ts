@@ -1,11 +1,10 @@
 import {randomUUID} from 'node:crypto';
 import {DB} from '../db.js';
 import {encrypt,decrypt} from './secrets.js';
-export type Provider='twilio'|'polar'|'google'|'telegram'|'whatsapp';
+export type Provider='polar'|'google'|'telegram'|'whatsapp';
 export type FetchLike=(url:string,init?:RequestInit)=>Promise<Response>;
 /** Which submitted fields are secrets (encrypted, never returned) and which are plain config. */
 export const providerFields:Record<Provider,{secrets:string[];config:string[]}>={
- twilio:{secrets:['accountSid','authToken'],config:['whatsappFrom']},
  polar:{secrets:['accessToken','webhookSecret'],config:['productId']},
  google:{secrets:['clientId','clientSecret'],config:[]},
  telegram:{secrets:['botToken'],config:[]},

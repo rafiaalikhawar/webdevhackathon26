@@ -10,20 +10,18 @@ import {checkMeta} from './whatsapp.js';
 import {checkPolar} from './polar.js';
 export let http:FetchLike=(u,i)=>fetch(u,i);
 export const setHttp=(f:FetchLike)=>{http=f};
-const provider=z.enum(['twilio','polar','google','telegram','whatsapp']);
+const provider=z.enum(['polar','google','telegram','whatsapp']);
 /** What each integration can and cannot do, shown on the Integrations page (I5.6). */
 const limits:Record<Provider,string>={
- twilio:'WhatsApp sandbox only reaches phones that have joined it by sending the join phrase. Sandbox messages are for testing, and customers must have messaged first within 24 hours for free-form replies.',
  polar:'Sandbox only: use a Polar sandbox organization, a sandbox access token and Polar’s test card. Card details are entered on Polar’s hosted checkout and never reach Relay. Payments are created against one product you choose; Relay sets the price for each request.',
  google:'Apps in testing status accept only listed test users, and refresh tokens may expire after 7 days. Each employee connects their own calendar.',
  whatsapp:'Meta’s test number only messages phone numbers on its allowed recipient list. Free-form replies work only within 24 hours of the customer’s last message; otherwise use an approved template. The temporary access token expires after about 24 hours and must be replaced.',
  telegram:'Alerts reach only people who have started a chat with your bot. Each employee sets their own chat id.'
 };
-const webhookPath=(p:Provider,ws:string)=>p==='twilio'?{inbound:`${publicBase()}/api/webhooks/twilio/${ws}/inbound`,status:`${publicBase()}/api/webhooks/twilio/${ws}/status`}:p==='polar'?{endpoint:`${publicBase()}/api/webhooks/polar/${ws}`}:p==='google'?{redirectUri:`${publicBase()}/api/oauth/google/callback`}:p==='whatsapp'?{callbackUrl:`${publicBase()}/api/webhooks/whatsapp/${ws}`}:{};
+const webhookPath=(p:Provider,ws:string)=>p==='polar'?{endpoint:`${publicBase()}/api/webhooks/polar/${ws}`}:p==='google'?{redirectUri:`${publicBase()}/api/oauth/google/callback`}:p==='whatsapp'?{callbackUrl:`${publicBase()}/api/webhooks/whatsapp/${ws}`}:{};
 /** Verifies freshly entered credentials against the provider before saving them. */
 async function verify(p:Provider,s:Record<string,string>,c:Record<string,string>):Promise<string|null>{
  if(process.env.NODE_ENV!=='production'&&process.env.INTEGRATIONS_SKIP_VERIFY==='1')return null;
- if(p==='twilio'){const r=await callProvider(http,`${endpoints.twilio()}/2010-04-01/Accounts/${s.accountSid}.json`,{headers:{Authorization:'Basic '+Buffer.from(`${s.accountSid}:${s.authToken}`).toString('base64')}});return r.status===200?null:explain(r.status,r.json?.message);}
  if(p==='polar')return checkPolar(http,{accessToken:s.accessToken,productId:c.productId});
  if(p==='whatsapp')return checkMeta(http,{accessToken:s.accessToken,phoneNumberId:c.phoneNumberId});
  if(p==='telegram'){const r=await callProvider(http,`${endpoints.telegram()}/bot${s.botToken}/getMe`,{});return r.status===200&&r.json?.ok?null:explain(r.status,r.json?.description);}
@@ -48,7 +46,6 @@ export class IntegrationsController{
   const secrets:Record<string,string>={...(existing?.secrets||{})},config:Record<string,string>={...(existing?.config||{})};
   for(const k of spec.secrets)if(body[k])secrets[k]=body[k];for(const k of spec.config)if(k in body)config[k]=body[k];
   const missing=spec.secrets.filter(k=>!secrets[k]);if(missing.length)throw new HttpException(`Missing required fields: ${missing.join(', ')}.`,400);
-  if(p==='twilio'&&!config.whatsappFrom)throw new HttpException('Enter the sandbox WhatsApp number, for example +14155238886.',400);
   if(p==='polar'&&!/^[0-9a-fA-F-]{36}$/.test(config.productId||''))throw new HttpException('Enter the Polar product ID (a UUID) from your sandbox dashboard → Products.',400);
   if(p==='whatsapp'&&!/^\d{5,20}$/.test(config.phoneNumberId||''))throw new HttpException('Enter the WhatsApp Phone number ID from Meta’s API setup page (digits only).',400);
   const problem=await verify(p,secrets,config);if(problem)throw new HttpException(problem,400);

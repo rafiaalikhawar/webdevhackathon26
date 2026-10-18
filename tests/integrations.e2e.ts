@@ -9,15 +9,14 @@ import 'dotenv/config';
 
 const API_PORT=3002,STUB_PORT=4010,api=`http://localhost:${API_PORT}/api`,origin='http://localhost:5173',base=`http://localhost:${API_PORT}`;
 const calls:{provider:string;method:string;path:string;body:string}[]=[];
-const mode={meta:'ok',twilio:'ok',telegram:'ok',google:'ok',busy:[] as {start:string;end:string}[]};
-let sid=0,lastTwilioSid='',lastMetaId='';
+const mode={meta:'ok',telegram:'ok',google:'ok',busy:[] as {start:string;end:string}[]};
+let sid=0,lastMetaId='';
 
 const stub=http.createServer((req,res)=>{let body='';req.on('data',c=>body+=c);req.on('end',()=>{
- const url=req.url||'',provider=url.startsWith('/graph')?'graph':url.startsWith('/twilio')?'twilio':url.startsWith('/polar')?'polar':url.startsWith('/telegram')?'telegram':url.startsWith('/gtoken')?'gtoken':'gcal';
+ const url=req.url||'',provider=url.startsWith('/graph')?'graph':url.startsWith('/polar')?'polar':url.startsWith('/telegram')?'telegram':url.startsWith('/gtoken')?'gtoken':'gcal';
  calls.push({provider,method:req.method||'',path:url,body});
  const json=(s:number,o:unknown)=>{res.writeHead(s,{'Content-Type':'application/json'});res.end(s===204?'':JSON.stringify(o));};
  if(provider==='graph'){if(req.method==='GET')return json(200,{display_phone_number:'+1 555 000'});if(mode.meta==='expired')return json(401,{error:{code:190,message:'Session has expired'}});if(mode.meta==='window')return json(400,{error:{code:131047,message:'Re-engagement message'}});lastMetaId='wamid.OUT'+(++sid);return json(200,{messages:[{id:lastMetaId}]});}
- if(provider==='twilio'){if(url.endsWith('.json')&&req.method==='GET')return json(200,{sid:'AC1'});if(mode.twilio==='fail')return json(500,{message:'boom'});lastTwilioSid='SM'+(++sid);return json(201,{sid:lastTwilioSid});}
  if(provider==='polar'){if(req.method==='GET')return json(200,{id:'prod'});return json(201,{id:'co_test_'+(++sid),url:'https://sandbox.polar.test/checkout/'+sid,status:'open'});}
  if(provider==='telegram'){if(url.includes('getMe'))return json(200,{ok:true});if(mode.telegram==='unauthorized')return json(401,{ok:false,description:'Unauthorized'});return json(200,{ok:true});}
  if(provider==='gtoken'){const p=new URLSearchParams(body);if(p.get('grant_type')==='refresh_token'&&mode.google==='revoked')return json(400,{error:'invalid_grant'});return json(200,{access_token:'at-'+(++sid),refresh_token:p.get('grant_type')==='authorization_code'?'rt-1':undefined,expires_in:1});}
@@ -28,7 +27,7 @@ const stub=http.createServer((req,res)=>{let body='';req.on('data',c=>body+=c);r
 
 let children:ChildProcess[]=[];
 const env={...process.env,PORT:String(API_PORT),NODE_ENV:'development',PUBLIC_BASE_URL:base,INTEGRATIONS_SKIP_VERIFY:'1',
- TWILIO_API_BASE:`http://localhost:${STUB_PORT}/twilio`,POLAR_API_BASE:`http://localhost:${STUB_PORT}/polar`,TELEGRAM_API_BASE:`http://localhost:${STUB_PORT}/telegram`,META_GRAPH_BASE:`http://localhost:${STUB_PORT}/graph`,GOOGLE_TOKEN_URL:`http://localhost:${STUB_PORT}/gtoken`,GOOGLE_CALENDAR_BASE:`http://localhost:${STUB_PORT}/gcal`};
+ POLAR_API_BASE:`http://localhost:${STUB_PORT}/polar`,TELEGRAM_API_BASE:`http://localhost:${STUB_PORT}/telegram`,META_GRAPH_BASE:`http://localhost:${STUB_PORT}/graph`,GOOGLE_TOKEN_URL:`http://localhost:${STUB_PORT}/gtoken`,GOOGLE_CALENDAR_BASE:`http://localhost:${STUB_PORT}/gcal`};
 before(async()=>{
  await new Promise<void>(r=>stub.listen(STUB_PORT,r));
  for(const script of ['server/main.ts','server/worker.ts'])children.push(spawn('node',['--import','tsx',script],{env:{...env,APP_ORIGIN:origin},stdio:['ignore','inherit','inherit']}));
@@ -42,16 +41,12 @@ class Client{cookies:Record<string,string>={};csrf='';ws='';
   const r=await fetch(api+path,{method,headers:h,body:body===undefined?undefined:raw?String(body):JSON.stringify(body),redirect:'manual'});for(const c of r.headers.getSetCookie())this.cookies[c.split('=')[0]]=c.split(';')[0].split('=')[1];const t=await r.text();let j:any=null;try{j=t?JSON.parse(t):null}catch{j=t}return {status:r.status,body:j,headers:r.headers};}
  async signup(){const email=`${crypto.randomUUID().slice(0,8)}@int.test`;const r=await this.call('POST','/auth/signup',{email,password:'correct-horse-battery',name:'Owner',workspace:'Int'});assert.equal(r.status,201,JSON.stringify(r.body));this.csrf=r.body.csrf;this.ws=r.body.workspace.id;return r.body;}}
 
-const twilioSig=(token:string,url:string,params:Record<string,string>)=>createHmac('sha1',token).update(url+Object.keys(params).sort().map(k=>k+params[k]).join('')).digest('base64');
 const polarSig=(secret:string,id:string,payload:string,t=Math.floor(Date.now()/1000))=>({'webhook-id':id,'webhook-timestamp':String(t),'webhook-signature':'v1,'+createHmac('sha256',Buffer.from(secret.replace(/^whsec_/,''),'base64')).update(`${id}.${t}.${payload}`).digest('base64')});
 
-async function twilioPost(c:Client,kind:'inbound'|'status',params:Record<string,string>,token='tok',forge=false){
- const path=`/webhooks/twilio/${c.ws}/${kind}`;const sig=forge?'AAAA':twilioSig(token,`${base}/api${path}`,params);
- const r=await fetch(api+path,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Twilio-Signature':sig},body:new URLSearchParams(params)});return r.status;}
 
 async function setup(){
  const c=new Client();await c.signup();
- for(const [p,body] of Object.entries({twilio:{accountSid:'AC1',authToken:'tok',whatsappFrom:'+14155238886'},polar:{accessToken:'polar_oat_abc123',webhookSecret:'whsec_'+Buffer.from('polar-test-secret').toString('base64'),productId:'11111111-1111-4111-8111-111111111111'},telegram:{botToken:'123:ABCDEF'},google:{clientId:'cid',clientSecret:'csecret'}}))assert.equal((await c.call('PUT','/integrations/'+p,body)).status,200,p);
+ for(const [p,body] of Object.entries({polar:{accessToken:'polar_oat_abc123',webhookSecret:'whsec_'+Buffer.from('polar-test-secret').toString('base64'),productId:'11111111-1111-4111-8111-111111111111'},telegram:{botToken:'123:ABCDEF'},google:{clientId:'cid',clientSecret:'csecret'}}))assert.equal((await c.call('PUT','/integrations/'+p,body)).status,200,p);
  return c;
 }
 
@@ -65,35 +60,6 @@ test('secrets are encrypted at rest and masked in the API',async()=>{
  const inv2=await c.call('POST','/invitations',{email:'plain@int.test',baseLevel:'User'});const t2=new URL(inv2.body.link).searchParams.get('invite')!;void token;
  const acc=await user.call('POST','/public/accept-invite',{token:t2,workspaceId:c.ws,email:'plain@int.test',password:'correct-horse-battery',name:'Plain'});
  if(acc.status===201){user.csrf=acc.body.csrf;assert.equal((await user.call('GET','/integrations')).status,403);assert.equal((await user.call('PUT','/integrations/polar',{accessToken:'x'})).status,403);}
-});
-
-test('twilio: signature, de-duplication, contact matching, opt-out, send, retry and delivery status',async()=>{
- const c=await setup();
- const params={MessageSid:'SMin1',From:'whatsapp:+12025550101',To:'whatsapp:+14155238886',Body:'Hi, interested in a quote',ProfileName:'Dana Lee'};
- assert.equal(await twilioPost(c,'inbound',params,'tok',true),403,'forged signature must be rejected');
- assert.equal(await twilioPost(c,'inbound',{...params,Body:'tampered'},'wrong-token'),403,'wrong token must be rejected');
- assert.equal(await twilioPost(c,'inbound',params),200);assert.equal(await twilioPost(c,'inbound',params),200,'duplicate delivery is acknowledged');
- let leads=await c.call('GET','/leads');assert.equal(leads.body.total,1,'one lead, not two');assert.equal(leads.body.records[0].source,'WhatsApp');
- assert.equal(await twilioPost(c,'inbound',{...params,MessageSid:'SMin2',Body:'Following up'}),200);
- leads=await c.call('GET','/leads');assert.equal(leads.body.total,1,'known number attaches to the existing contact');
- let boot=await c.call('GET','/bootstrap');assert.equal(boot.body.data.chats[0].messages.length,2);
- const contactId=leads.body.records[0].contact_id;
- // Provider failure keeps the message visible as failed, and it can be retried.
- mode.twilio='fail';const failed=await c.call('POST',`/contacts/${contactId}/messages`,{body:'Thanks Dana!'});assert.equal(failed.status,201);assert.equal(failed.body.status,'failed');assert.ok(failed.body.error);
- boot=await c.call('GET','/bootstrap');const out=boot.body.data.chats[0].messages.find((m:any)=>m.direction==='out');assert.equal(out.status,'Failed');
- mode.twilio='ok';const retry=await c.call('POST',`/messages/${out.id}/retry`);assert.equal(retry.status,201);assert.equal(retry.body.status,'sent');
- const sentSid=[...calls].reverse().find(x=>x.provider==='twilio'&&x.method==='POST')!;assert.ok(sentSid);
- // Delivery callbacks update the stored status; a late "sent" never downgrades "delivered".
- const msgStatus=async()=>(await c.call('GET','/bootstrap')).body.data.chats[0].messages.find((m:any)=>m.id===out.id).status;
- assert.equal(await msgStatus(),'Sent');
- assert.equal(await twilioPost(c,'status',{MessageSid:lastTwilioSid,MessageStatus:'delivered'}),200);assert.equal(await msgStatus(),'Delivered');
- assert.equal(await twilioPost(c,'status',{MessageSid:lastTwilioSid,MessageStatus:'sent'}),200);assert.equal(await msgStatus(),'Delivered');
- assert.equal(await twilioPost(c,'status',{MessageSid:lastTwilioSid,MessageStatus:'delivered'},'tok',true),403);
- // Opt-out
- assert.equal(await twilioPost(c,'inbound',{...params,MessageSid:'SMin3',Body:'STOP'}),200);
- const blocked=await c.call('POST',`/contacts/${contactId}/messages`,{body:'hello?'});assert.equal(blocked.status,409);assert.match(blocked.body.error,/opted out/);
- // Integration history records accepted and rejected events.
- const events=await c.call('GET','/integrations/events');assert.ok(events.body.some((e:any)=>e.status==='rejected'));assert.ok(events.body.some((e:any)=>e.event_type==='message.inbound'&&e.status==='ok'));
 });
 
 test('polar: checkout, signed webhooks, idempotency, expiry and refunds',async()=>{

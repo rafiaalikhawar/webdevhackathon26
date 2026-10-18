@@ -1,4 +1,4 @@
-import {Controller,Get,Post,Req,Res,Param,Query,HttpException,Header,HttpCode} from '@nestjs/common';
+import {Controller,Get,Post,Req,Res,Param,Query,HttpException,HttpCode} from '@nestjs/common';
 import type {Request,Response} from 'express';
 import {z} from 'zod';
 import {transaction,audit,DB} from '../db.js';
@@ -7,7 +7,6 @@ import {requirePermission,requireRecord,Context} from '../policy.js';
 import {acknowledge,lockRules} from '../lead-service.js';
 import {captureLead,addActivity} from '../intake.js';
 import {credentials,recordEvent,markResult,publicBase,getIntegration} from './registry.js';
-import {verifyTwilio,sendTwilio,stripWhatsapp} from './twilio.js';
 import {verifyPolar,createCheckout} from './polar.js';
 import {http} from './manage.js';
 import {verifyMeta,safeEqual,sendMeta,toE164,explainMeta} from './whatsapp.js';
@@ -27,24 +26,23 @@ async function ingestInbound(db:DB,ws:string,m:{id:string;phone:string;name?:str
  await db.query("INSERT INTO notifications(workspace_id,member_id,kind,body) VALUES($1,$2,'message',$3)",[ws,contact.owner_id,`New WhatsApp message from ${contact.name}.`]);
 }
 
-/** Sends one queued/failed outbound message through the connected WhatsApp provider (Meta Cloud API preferred, else Twilio) and records the outcome. Never throws for provider failures. */
+/** Sends one queued/failed outbound message through the WhatsApp (Meta Cloud API) and records the outcome. Never throws for provider failures. */
 export async function deliverMessage(ws:string,messageId:string){
  const prep=await transaction(ws,async db=>{
   const m=(await db.query("SELECT m.*,c.contact_id FROM messages m JOIN conversations c ON c.id=m.conversation_id AND c.workspace_id=m.workspace_id WHERE m.id=$1 AND m.workspace_id=$2 AND m.direction='out' FOR UPDATE",[messageId,ws])).rows[0];
   if(!m)throw nf();if(m.status==='sent'||m.status==='delivered')return null;
   const contact=(await db.query('SELECT phone,opted_out FROM contacts WHERE id=$1 AND workspace_id=$2',[m.contact_id,ws])).rows[0];
   if(contact.opted_out)throw new HttpException('This contact opted out of messages, so Relay cannot send to them.',409);
-  const meta=await credentials(db,ws,'whatsapp'),tw=meta?null:await credentials(db,ws,'twilio');
-  if(!meta&&!tw)throw new HttpException('Messaging is not connected. An Admin can connect WhatsApp (Meta) or Twilio on the Integrations page.',409);
+  const meta=await credentials(db,ws,'whatsapp');
+  if(!meta)throw new HttpException('Messaging is not connected. An Admin can connect WhatsApp (Meta) on the Integrations page.',409);
   const windowClosed=!!meta&&!m.template&&!(await db.query("SELECT 1 FROM messages WHERE workspace_id=$1 AND conversation_id=$2 AND direction='in' AND created_at>now()-interval '24 hours' LIMIT 1",[ws,m.conversation_id])).rows[0];
-  return {m,to:contact.phone as string,meta,tw,windowClosed};
+  return {m,to:contact.phone as string,meta,windowClosed};
  });
  if(!prep)return {status:'sent'};
- const integrationId=(prep.meta||prep.tw)!.id;
+ const integrationId=prep.meta.id;
  const r:{ok:true;id:string}|{ok:false;reason:string}=prep.windowClosed
   ?{ok:false,reason:'WhatsApp only allows free-form replies within 24 hours of the customer’s last message. Send an approved template instead.'}
-  :prep.meta?await sendMeta(http,{accessToken:prep.meta.secrets.accessToken,phoneNumberId:prep.meta.config.phoneNumberId,to:prep.to,body:prep.m.body,template:prep.m.template||undefined}).then(x=>x.ok?{ok:true as const,id:x.id}:x)
-  :await sendTwilio(http,{accountSid:prep.tw!.secrets.accountSid,authToken:prep.tw!.secrets.authToken,from:prep.tw!.config.whatsappFrom,to:prep.to,body:prep.m.body,statusCallback:`${publicBase()}/api/webhooks/twilio/${ws}/status`}).then(x=>x.ok?{ok:true as const,id:x.sid}:x);
+  :await sendMeta(http,{accessToken:prep.meta.secrets.accessToken,phoneNumberId:prep.meta.config.phoneNumberId,to:prep.to,body:prep.m.body,template:prep.m.template||undefined}).then(x=>x.ok?{ok:true as const,id:x.id}:x);
  return transaction(ws,async db=>{
   if(r.ok){await db.query("UPDATE messages SET status='sent',provider_id=$3,error_code=NULL WHERE id=$1 AND workspace_id=$2",[messageId,ws,r.id]);await recordEvent(db,ws,integrationId,{eventId:'out:'+r.id,direction:'out',type:'message.send',summary:{messageId,id:r.id}});await markResult(db,integrationId,ws,true);return {status:'sent'};}
   await db.query("UPDATE messages SET status='failed',error_code=$3 WHERE id=$1 AND workspace_id=$2",[messageId,ws,r.reason.slice(0,300)]);
@@ -106,32 +104,6 @@ export class ChannelController{
 const rank:Record<string,number>={queued:0,sent:1,delivered:2,failed:2};
 @Controller('api/webhooks')
 export class WebhookController{
- @Post('twilio/:ws/inbound')@HttpCode(200)@Header('Content-Type','text/xml')async inbound(@Req()req:Request,@Param('ws')ws:string,@Res({passthrough:true})res:Response){
-  const workspace=uuid.parse(ws),params=toParams(req.body);
-  return transaction(workspace,async db=>{
-   const c=await credentials(db,workspace,'twilio');if(!c)throw nf('Messaging is not configured for this workspace.');
-   if(!verifyTwilio(c.secrets.authToken,publicBase()+req.originalUrl,params,req.header('x-twilio-signature'))){await recordEvent(db,workspace,c.id,{direction:'in',type:'message.inbound',status:'rejected',error:'Signature verification failed.'});res.status(403);return '<Response/>';}
-   const sid=params.MessageSid;if(!sid){res.status(400);return '<Response/>';}
-   if(!await recordEvent(db,workspace,c.id,{eventId:sid,direction:'in',type:'message.inbound',summary:{sid,from:mask4(params.From)}}))return '<Response/>';
-   await ingestInbound(db,workspace,{id:sid,phone:stripWhatsapp(params.From||''),name:params.ProfileName,body:(params.Body||'').slice(0,1600)});
-   await markResult(db,c.id,workspace,true);
-   return '<Response/>';
-  });
- }
- @Post('twilio/:ws/status')@HttpCode(200)@Header('Content-Type','text/xml')async status(@Req()req:Request,@Param('ws')ws:string,@Res({passthrough:true})res:Response){
-  const workspace=uuid.parse(ws),params=toParams(req.body);
-  return transaction(workspace,async db=>{
-   const c=await credentials(db,workspace,'twilio');if(!c)throw nf('Messaging is not configured for this workspace.');
-   if(!verifyTwilio(c.secrets.authToken,publicBase()+req.originalUrl,params,req.header('x-twilio-signature'))){await recordEvent(db,workspace,c.id,{direction:'in',type:'message.status',status:'rejected',error:'Signature verification failed.'});res.status(403);return '<Response/>';}
-   const sid=params.MessageSid,st=params.MessageStatus;if(!sid||!st){res.status(400);return '<Response/>';}
-   if(!await recordEvent(db,workspace,c.id,{eventId:`${sid}:${st}`,direction:'in',type:'message.status',summary:{sid,status:st}}))return '<Response/>';
-   const mapped=st==='delivered'||st==='read'?'delivered':st==='undelivered'||st==='failed'?'failed':st==='sent'?'sent':'queued';
-   const m=(await db.query("SELECT id,status FROM messages WHERE workspace_id=$1 AND provider_id=$2 AND direction='out' FOR UPDATE",[workspace,sid])).rows[0];
-   if(m&&(rank[mapped]>=(rank[m.status]??0)))await db.query('UPDATE messages SET status=$3,error_code=$4 WHERE id=$1 AND workspace_id=$2',[m.id,workspace,mapped,mapped==='failed'?`Provider error ${params.ErrorCode||'unknown'}`:null]);
-   if(mapped==='failed')await markResult(db,c.id,workspace,false,`Message ${sid} failed (code ${params.ErrorCode||'unknown'}).`);
-   return '<Response/>';
-  });
- }
  /** Meta webhook verification handshake. Echoes hub.challenge only when the saved verify token matches. */
  @Get('whatsapp/:ws')async whatsappVerify(@Param('ws')ws:string,@Query('hub.mode')mode:string|undefined,@Query('hub.verify_token')token:string|undefined,@Query('hub.challenge')challenge:string|undefined,@Res()res:Response){
   const workspace=uuid.parse(ws);
@@ -182,7 +154,6 @@ export class WebhookController{
   });
  }
 }
-const toParams=(b:any)=>Object.fromEntries(Object.entries(b||{}).map(([k,v])=>[k,String(v)])) as Record<string,string>;
 const mask4=(s='')=>s.length>4?'…'+s.slice(-4):'…';
 
 /** Applies a verified Polar event. Safe to call once per webhook id (the caller de-duplicates); every write is also idempotent. */
